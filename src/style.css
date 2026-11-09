@@ -68,11 +68,13 @@ button:disabled { cursor: default; opacity: .55; }
 #map svg { width: 100%; height: 100%; touch-action: none; user-select: none; }
 #map path { fill: #254353; stroke: #6c8c9a; stroke-width: 1.05; vector-effect: non-scaling-stroke; cursor: pointer; }
 #map path.lit { fill: #317e71; stroke: #80e8cb; }
+#map path[role="button"]:focus { outline: none; }
+#map path[role="button"]:focus-visible { stroke-width: 2; }
 #map path[role="button"]:hover, #map path[role="button"]:focus-visible { fill: #335667; stroke: #b4dce5; }
 #map path.outline { fill: #6c8c9a; pointer-events: none; }
 #map path.city-overlay { pointer-events: none; }
-#map path.map-detail { fill: none; stroke: #7798a5; pointer-events: none; }
-#map path.district-detail { stroke: #6a8a98; }
+#map path.map-detail { fill: none; stroke: #65818d; pointer-events: none; }
+#map path.district-detail { stroke: #4f6c79; stroke-width: .75; }
 #map svg text {
   fill: #e1f0f4;
   stroke: #102331;

@@ -1,10 +1,10 @@
 import { computed, shallowRef, watch } from 'vue';
-import { shape } from './map.js';
+import { root, shape } from './map.js';
 
 const intersects = (bounds, [left, top, right, bottom]) =>
   bounds[0] <= right && bounds[2] >= left && bounds[1] <= bottom && bounds[3] >= top;
 
-export function useMapDetail(map, view, children, isLit) {
+export function useMapDetail(map, view, children, isLit, areaId, levelOf) {
   const detail = shallowRef({ cities: [], districts: [] });
   const viewport = computed(() => {
     if (!map.value) return null;
@@ -14,6 +14,10 @@ export function useMapDetail(map, view, children, isLit) {
   const zoomedBounds = computed(() => viewport.value?.map((value, index) =>
     (value - (index % 2 ? view.y : view.x)) / view.scale
   ));
+
+  const national = computed(() => areaId.value === root);
+  const cityZoom = computed(() => national.value ? 2.6 : 2);
+  const districtZoom = computed(() => national.value ? 7 : 4);
 
   async function loadChildren(currentMap, parents, bounds) {
     const layers = await Promise.all(parents
@@ -31,16 +35,19 @@ export function useMapDetail(map, view, children, isLit) {
 
   watch([map, zoomedBounds], ([currentMap, bounds], [previousMap], onCleanup) => {
     const scale = view.scale;
-    if (currentMap !== previousMap || scale < 1.7) detail.value = { cities: [], districts: [] };
-    else if (scale < 3.5 && detail.value.districts.length) detail.value = { ...detail.value, districts: [] };
-    if (!currentMap || scale < 1.7) return;
+    if (currentMap !== previousMap || scale < cityZoom.value) detail.value = { cities: [], districts: [] };
+    else if (scale < districtZoom.value && detail.value.districts.length) detail.value = { ...detail.value, districts: [] };
+    if (!currentMap || scale < cityZoom.value) return;
 
     let cancelled = false;
     const timer = setTimeout(async () => {
-      const cities = await loadChildren(currentMap, currentMap.paths, bounds);
+      const childrenInView = await loadChildren(currentMap, currentMap.paths, bounds);
+      const cities = national.value && scale < districtZoom.value
+        ? childrenInView.filter(item => levelOf(item.adcode) !== 'district')
+        : childrenInView;
       if (cancelled) return;
       detail.value = { cities, districts: detail.value.districts };
-      if (scale < 3.5) return;
+      if (scale < districtZoom.value) return;
       const districts = await loadChildren(currentMap, cities, bounds);
       if (!cancelled) detail.value = { cities, districts };
     }, 100);
@@ -55,18 +62,27 @@ export function useMapDetail(map, view, children, isLit) {
     const [left, top, right, bottom] = viewport.value;
     const result = [];
     const layers = [...detail.value.districts, ...detail.value.cities, ...map.value.paths];
-    const highlighted = [...map.value.overlays, ...layers.filter(item => isLit(item.adcode))];
-    const visited = new Set(highlighted.map(item => item.adcode));
+    const priority = [...map.value.overlays, ...layers.filter(item => isLit(item.adcode))];
+    const visited = new Set(priority.map(item => item.adcode));
     const seen = new Set();
-    for (const { label } of [...highlighted, ...layers]) {
+    let ordinaryCount = 0;
+    for (const { label } of [...priority, ...layers]) {
       if (!label?.text || seen.has(label.adcode)) continue;
+      const highlighted = visited.has(label.adcode);
+      if (national.value && !highlighted) {
+        const level = levelOf(label.adcode);
+        if (ordinaryCount >= 10 ||
+            (level === 'city' && view.scale < 3) ||
+            (level === 'district' && view.scale < 7.5)) continue;
+      }
       seen.add(label.adcode);
       const x = label.x * view.scale + view.x;
       const y = label.y * view.scale + view.y;
       const halfWidth = label.text.length * 8;
       if (x - halfWidth < left || x + halfWidth > right || y < top + 15 || y > bottom - 5) continue;
       if (result.some(other => Math.abs(other.y - y) < 18 && Math.abs(other.x - x) < other.halfWidth + halfWidth + 4)) continue;
-      result.push({ ...label, x, y, halfWidth, highlighted: visited.has(label.adcode) });
+      result.push({ ...label, x, y, halfWidth, highlighted });
+      if (!highlighted) ordinaryCount++;
     }
     return result;
   });

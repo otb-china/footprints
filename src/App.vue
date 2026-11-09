@@ -49,7 +49,7 @@ const cityHighlights = computed(() => {
 const isLit = id => areaId.value === root
   ? municipalities.has(id) && lit.value.has(id)
   : lit.value.has(id);
-const { detail, labels } = useMapDetail(map, view, children, isLit);
+const { detail, labels } = useMapDetail(map, view, children, isLit, areaId, id => byId.value[id]?.level);
 const hint = computed(() => {
   if (!data.value) return '';
   if (areaId.value === root) return '点击省级地区，查看下一级';
