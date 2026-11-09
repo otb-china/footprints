@@ -38,20 +38,35 @@ export function drawMap(geo, areas, name, overlays = []) {
     return [(width/2+(x-(minX+maxX)/2)*scale).toFixed(2),(height/2+(y-(minY+maxY)/2)*scale).toFixed(2)];
   };
 
-  const pathFor = feature => groups(feature).flatMap(polygon =>
-    polygon.map(ring => 'M' + ring.map(point => xy(point).join(',')).join('L') + 'Z')
-  ).join(' ');
-  const labels = [];
-  const paths = features.map(feature => {
+  const projected = new WeakMap();
+  function projectFeature(feature) {
+    if (projected.has(feature)) return projected.get(feature);
     const { adcode, center, centroid } = feature.properties;
-    const outline = !valid.has(adcode);
-    if (!outline && (centroid || center)) {
-      const [x, y] = xy(centroid || center);
-      if (!labels.some(label => Math.abs(label.x - x) < 40 && Math.abs(label.y - y) < 16)) {
-        labels.push({ adcode, x, y, text: name(adcode).replace(/(省|市)$/, '') });
-      }
+    const bounds = [Infinity, Infinity, -Infinity, -Infinity];
+    const path = groups(feature).flatMap(polygon => polygon.map(ring => {
+      const points = ring.map(point => {
+        const [x, y] = xy(point).map(Number);
+        bounds[0] = Math.min(bounds[0], x);
+        bounds[1] = Math.min(bounds[1], y);
+        bounds[2] = Math.max(bounds[2], x);
+        bounds[3] = Math.max(bounds[3], y);
+        return x + ',' + y;
+      });
+      return 'M' + points.join('L') + 'Z';
+    })).join(' ');
+    const anchor = centroid || center;
+    let label;
+    if (anchor && adcode !== '100000_JD') {
+      const [x, y] = xy(anchor).map(Number);
+      label = { adcode, x, y, text: name(adcode).replace(/(省|市)$/, '') };
     }
-    return { adcode, path: pathFor(feature), outline };
+    const item = { adcode, path, bounds, label };
+    projected.set(feature, item);
+    return item;
+  }
+  const paths = features.map(feature => {
+    const item = projectFeature(feature);
+    return { ...item, outline: !valid.has(item.adcode) };
   });
   // Fit the SVG to the actual map bounds so narrow screens don't scale empty margins.
   const padding = 18;
@@ -64,8 +79,8 @@ export function drawMap(geo, areas, name, overlays = []) {
     mapHeight + padding * 2,
   ].join(' ');
   return {
-    paths, labels, viewBox,
-    overlays: overlays.map(feature => ({ adcode: feature.properties.adcode, path: pathFor(feature) })),
+    paths, viewBox, projectFeature,
+    overlays: overlays.map(projectFeature),
   };
 }
 

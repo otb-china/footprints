@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { coordinates, drawMap, match, readJson, root, shape } from './map.js';
 import { parseBackup, serializeBackup } from './backup.js';
 import { useMapZoom } from './mapZoom.js';
+import { useMapDetail } from './mapDetail.js';
 
 const storageKey = 'footprints-v1';
 const municipalities = new Set([110000, 120000, 310000, 500000]);
@@ -25,7 +26,7 @@ const children = id => (data.value?.[id]?.children || []).filter(area => levels.
 const name = id => byId.value[id]?.name || '';
 const areaId = computed(() => trail.value.at(-1) || root);
 const {
-  transform, canZoomIn, canZoomOut, zoom, resetZoom,
+  view, transform, canZoomIn, canZoomOut, zoom, resetZoom,
   onWheel, onPointerDown, onPointerMove, onPointerEnd, onMapClick,
 } = useMapZoom(map, areaId);
 const areas = computed(() => children(areaId.value));
@@ -48,6 +49,7 @@ const cityHighlights = computed(() => {
 const isLit = id => areaId.value === root
   ? municipalities.has(id) && lit.value.has(id)
   : lit.value.has(id);
+const { detail, labels } = useMapDetail(map, view, children, isLit);
 const hint = computed(() => {
   if (!data.value) return '';
   if (areaId.value === root) return '点击省级地区，查看下一级';
@@ -132,7 +134,7 @@ function openEditor(id) {
     date: record ? record.date || '' : localDate,
     note: record?.note || '',
   });
-  editorStatus.value = '定位后自动填写，也可以手动补录。';
+  editorStatus.value = '';
   editor.value.showModal();
 }
 
@@ -277,25 +279,23 @@ function exportRecords() {
 
 <template>
   <header>
-    <div class="brand"><b>✦</b><div>我的足迹<small>TRAVEL ATLAS</small></div></div>
+    <h1 class="brand"><span aria-hidden="true">✦</span>我的足迹</h1>
     <button class="primary" :disabled="!data" @click="openEditor()">＋ 新增足迹</button>
   </header>
   <main>
-    <section class="intro">
-      <div class="kicker">个人旅行地图</div>
-      <h1>走过的地方，<em>都值得点亮。</em></h1>
-      <p>从省份到城市，再到区县，慢慢拼出自己的旅行版图。</p>
-    </section>
     <div class="layout">
       <section class="panel">
-        <div class="bar">
+        <div class="bar map-bar">
           <nav aria-label="地图层级">
-            <button v-for="(id, index) in [root, ...trail]" :key="id" @click="trail = trail.slice(0, index)">
-              {{ id === root ? '全国' : name(id) }}
-            </button>
-            <button v-if="areaId !== root" @click="openEditor(areaId)">点亮这里</button>
+            <template v-for="(id, index) in [root, ...trail]" :key="id">
+              <span v-if="index" class="crumb-separator" aria-hidden="true">/</span>
+              <span v-if="id === areaId" aria-current="location">{{ id === root ? '全国' : name(id) }}</span>
+              <button v-else type="button" @click="trail = trail.slice(0, index)">
+                {{ id === root ? '全国' : name(id) }}
+              </button>
+            </template>
           </nav>
-          <span class="legend">● 已点亮</span>
+          <span class="legend">已点亮</span>
         </div>
         <div id="map" aria-label="行政区地图">
           <svg v-if="map" :viewBox="map.viewBox" @wheel.prevent="onWheel"
@@ -313,8 +313,12 @@ function exportRecords() {
               </template>
               <path v-for="item in map.overlays" :key="'city-' + item.adcode" class="lit city-overlay"
                 :d="item.path" fill-rule="evenodd" />
-              <text v-for="label in map.labels" :key="label.adcode" :x="label.x" :y="label.y">{{ label.text }}</text>
+              <path v-for="item in detail.cities" :key="'detail-' + item.adcode" class="map-detail"
+                :d="item.path" fill-rule="evenodd" />
+              <path v-for="item in detail.districts" :key="'district-' + item.adcode" class="map-detail district-detail"
+                :d="item.path" fill-rule="evenodd" />
             </g>
+            <text v-for="label in labels" :key="label.adcode" :class="{ 'lit-label': label.highlighted }" :x="label.x" :y="label.y">{{ label.text }}</text>
           </svg>
           <div v-if="map" class="map-controls" role="group" aria-label="地图缩放">
             <button type="button" aria-label="放大地图" :disabled="!canZoomIn" @click="zoom(1)">＋</button>
@@ -325,20 +329,23 @@ function exportRecords() {
         </div>
         <div class="bar foot">
           <span>{{ hint }}</span>
-          <a href="https://datav.aliyun.com/portal/school/atlas/area_selector" target="_blank" rel="noopener">区划数据 · DataV</a>
+          <button v-if="areaId !== root" type="button" class="map-mark" @click="openEditor(areaId)">点亮这里</button>
         </div>
-        <div id="regions">
-          <button v-for="area in areas" :key="area.adcode" :class="{ lit: isLit(area.adcode) }" @click="openArea(area.adcode)">
-            {{ area.name }}
-          </button>
-        </div>
+        <details v-if="areas.length" class="region-list">
+          <summary>地区列表</summary>
+          <div id="regions">
+            <button v-for="area in areas" :key="area.adcode" :class="{ lit: isLit(area.adcode) }" @click="openArea(area.adcode)">
+              {{ area.name }}
+            </button>
+          </div>
+        </details>
       </section>
       <aside class="panel side">
-        <div class="kicker">你的版图</div>
+        <h2>足迹概览</h2>
         <div class="stats">
           <div v-for="(label, index) in ['省级地区', '城市', '区县']" :key="label"><strong>{{ stats[index] }}</strong>{{ label }}</div>
         </div>
-        <div class="records-head"><h2>点亮记录</h2></div>
+        <h2>点亮记录</h2>
         <div class="record-actions">
           <button :disabled="!data" @click="openImport('cities')">批量导入城市</button>
           <button :disabled="!data" @click="openImport('backup')">导入备份</button>
@@ -356,37 +363,39 @@ function exportRecords() {
     </div>
   </main>
 
-  <dialog ref="editor" @close="closeEditor">
+  <dialog ref="editor" class="footprint-editor" aria-labelledby="editor-title" @close="closeEditor">
     <form @submit.prevent="saveFootprint">
       <div class="bar modalhead">
-        <h2>{{ editing ? '编辑足迹' : '新增足迹' }}</h2>
-        <button type="button" aria-label="关闭" @click="editor.close()">×</button>
+        <h2 id="editor-title">{{ editing ? '编辑足迹' : '新增足迹' }}</h2>
+        <button type="button" class="editor-close" aria-label="关闭" @click="editor.close()">×</button>
       </div>
-      <button class="locate" type="button" :disabled="locating" @click="locate">◎ 获取当前位置</button>
+      <button class="locate" type="button" :disabled="locating" @click="locate">使用当前位置</button>
       <p id="status" role="status">{{ editorStatus }}</p>
-      <label>省级地区
-        <select v-model="draft.p" required @change="draft.c = draft.d = ''">
-          <option value="">请选择省级地区</option>
-          <option v-for="area in provinces" :key="area.adcode" :value="area.adcode">{{ area.name }}</option>
-        </select>
-      </label>
-      <label>城市
-        <select v-model="draft.c" :disabled="!cities.length" @change="draft.d = ''">
-          <option value="">仅记录省级地区</option>
-          <option v-for="area in cities" :key="area.adcode" :value="area.adcode">{{ area.name }}</option>
-        </select>
-      </label>
-      <label>区县（选填）
-        <select v-model="draft.d" :disabled="!districts.length">
-          <option value="">不选择区县</option>
-          <option v-for="area in districts" :key="area.adcode" :value="area.adcode">{{ area.name }}</option>
-        </select>
-      </label>
-      <label>到访日期（选填）<input v-model="draft.date" type="date"></label>
-      <label>备注（选填）<textarea v-model="draft.note" rows="2" maxlength="300" placeholder="留下一个旅行记忆"></textarea></label>
+      <div class="editor-fields">
+        <label>省份
+          <select v-model="draft.p" required @change="draft.c = draft.d = ''">
+            <option value="">请选择省份</option>
+            <option v-for="area in provinces" :key="area.adcode" :value="area.adcode">{{ area.name }}</option>
+          </select>
+        </label>
+        <label>城市
+          <select v-model="draft.c" :disabled="!cities.length" @change="draft.d = ''">
+            <option value="">选择城市</option>
+            <option v-for="area in cities" :key="area.adcode" :value="area.adcode">{{ area.name }}</option>
+          </select>
+        </label>
+        <label>区县
+          <select v-model="draft.d" :disabled="!districts.length">
+            <option value="">选择区县</option>
+            <option v-for="area in districts" :key="area.adcode" :value="area.adcode">{{ area.name }}</option>
+          </select>
+        </label>
+        <label>到访日期<input v-model="draft.date" type="date"></label>
+        <label>备注<textarea v-model="draft.note" rows="2" maxlength="300"></textarea></label>
+      </div>
       <div class="actions">
         <button v-if="editing" type="button" @click="removeFootprint">取消点亮</button>
-        <button class="primary" type="submit">保存并点亮</button>
+        <button class="primary" type="submit">保存</button>
       </div>
     </form>
   </dialog>

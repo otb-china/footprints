@@ -87,5 +87,5 @@ export function useMapZoom(map, areaId) {
     if (moved && event.detail !== 0) event.stopPropagation();
   }
 
-  return { transform, canZoomIn, canZoomOut, zoom, resetZoom, onWheel, onPointerDown, onPointerMove, onPointerEnd, onMapClick };
+  return { view, transform, canZoomIn, canZoomOut, zoom, resetZoom, onWheel, onPointerDown, onPointerMove, onPointerEnd, onMapClick };
 }
