@@ -67,6 +67,8 @@ button:disabled { cursor: default; opacity: .55; }
 .region-list summary { padding: 9px 12px; color: var(--accent); font-size: 13px; cursor: pointer; }
 .legend, .foot { font-size: 12px; }
 .foot { color: var(--muted); }
+.map-credit { margin: 0 12px 9px; text-align: right; font-size: 11px; }
+.map-credit a { color: inherit; }
 
 #map {
   position: relative;
@@ -98,6 +100,10 @@ button:disabled { cursor: default; opacity: .55; }
   pointer-events: none;
 }
 #map svg text.lit-label { fill: #fff; stroke: #153b36; stroke-width: 2.5px; font-weight: 750; }
+#map .attraction-marker { pointer-events: none; }
+#map .attraction-pin { fill: #ffd184; stroke: #102331; stroke-width: 1.5; }
+#map .attraction-marker circle { fill: #102331; }
+#map .attraction-marker text { fill: #ffd184; font-weight: 750; }
 #map path.lit[role="button"]:is(:hover, :focus-visible) { fill: #408b7d; stroke: #aaf3de; }
 .map-controls { display: flex; margin-left: auto; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
 .map-controls button { min-width: 36px; min-height: 36px; padding: 4px 6px; border: 0; color: var(--text); }

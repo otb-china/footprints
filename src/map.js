@@ -80,6 +80,7 @@ export function drawMap(geo, areas, name, overlays = []) {
   ].join(' ');
   return {
     paths, viewBox, projectFeature,
+    projectPoint: point => xy(point).map(Number),
     overlays: overlays.map(projectFeature),
   };
 }

@@ -51,7 +51,7 @@ const cityHighlights = computed(() => {
 const isLit = id => areaId.value === root
   ? municipalities.has(id) && lit.value.has(id)
   : lit.value.has(id);
-const { detail, labels } = useMapDetail(map, view, viewport, children, isLit, areaId, id => byId.value[id]?.level);
+const { detail, labels, markers, attractionData } = useMapDetail(map, view, viewport, children, isLit, areaId, id => byId.value[id]?.level);
 const hint = computed(() => {
   if (!data.value) return '';
   if (map.value && canZoomOut.value) return '拖动地图查看其他区域';
@@ -336,6 +336,12 @@ function exportRecords() {
                 :d="item.path" fill-rule="evenodd" />
             </g>
             <text v-for="label in labels" :key="label.adcode" :class="{ 'lit-label': label.highlighted }" :x="label.x" :y="label.y">{{ label.text }}</text>
+            <g v-for="marker in markers" :key="marker.id" class="attraction-marker" role="img" :aria-label="marker.name">
+              <path class="attraction-pin" :transform="'translate(' + marker.x + ' ' + marker.y + ')'"
+                d="M0 0C-2-3-7-7-7-12a7 7 0 1 1 14 0c0 5-5 9-7 12Z" />
+              <circle :cx="marker.x" :cy="marker.y - 12" r="2.5" />
+              <text v-if="marker.label" :x="marker.labelBox.x" :y="marker.labelBox.y">{{ marker.label }}</text>
+            </g>
           </svg>
           <span v-else>{{ mapMessage }}</span>
         </div>
@@ -348,6 +354,10 @@ function exportRecords() {
             <button type="button" aria-label="恢复地图全览" :disabled="!canZoomOut" @click="resetZoom">复位</button>
           </div>
         </div>
+        <p v-if="markers.length && attractionData" class="map-credit">
+          景点数据来自 <a :href="attractionData.source" target="_blank" rel="noopener">Lore Routes</a>
+          · <a :href="attractionData.licenseUrl" target="_blank" rel="noopener">{{ attractionData.license }}</a>
+        </p>
         <details v-if="areas.length" class="region-list">
           <summary>地区列表</summary>
           <div id="regions">
