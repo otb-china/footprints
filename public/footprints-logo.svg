@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect x="2" y="2" width="60" height="60" rx="13" fill="#152432"/>
+  <path d="M7 22l16-6 18 6 16-6v33l-16 6-18-6-16 6Z"
+    fill="#285550" stroke="#72e3c5" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M23 16v33m18-27v33" fill="none" stroke="#72e3c5" stroke-width="2.5"/>
+  <defs>
+    <path id="stride" d="M35 23l-3 14-5 8-7 5m12-13 8 6 4 8M35 23l7 7 6 1m-13-8-7 5-4 7"/>
+  </defs>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <use href="#stride" stroke="#152432" stroke-width="10"/>
+    <use href="#stride" stroke="#9af3dc" stroke-width="5"/>
+  </g>
+  <circle cx="38" cy="12" r="5.5" fill="#9af3dc" stroke="#152432" stroke-width="2"/>
+</svg>

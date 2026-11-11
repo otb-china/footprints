@@ -4,13 +4,8 @@ import { root, shape } from './map.js';
 const intersects = (bounds, [left, top, right, bottom]) =>
   bounds[0] <= right && bounds[2] >= left && bounds[1] <= bottom && bounds[3] >= top;
 
-export function useMapDetail(map, view, children, isLit, areaId, levelOf) {
+export function useMapDetail(map, view, viewport, children, isLit, areaId, levelOf) {
   const detail = shallowRef({ cities: [], districts: [] });
-  const viewport = computed(() => {
-    if (!map.value) return null;
-    const [x, y, width, height] = map.value.viewBox.split(' ').map(Number);
-    return [x, y, x + width, y + height];
-  });
   const zoomedBounds = computed(() => viewport.value?.map((value, index) =>
     (value - (index % 2 ? view.y : view.x)) / view.scale
   ));
@@ -65,15 +60,16 @@ export function useMapDetail(map, view, children, isLit, areaId, levelOf) {
     const priority = [...map.value.overlays, ...layers.filter(item => isLit(item.adcode))];
     const visited = new Set(priority.map(item => item.adcode));
     const seen = new Set();
-    let ordinaryCount = 0;
+    const nationalOverview = national.value && view.scale < cityZoom.value;
+    let overviewLabels = 0;
     for (const { label } of [...priority, ...layers]) {
       if (!label?.text || seen.has(label.adcode)) continue;
       const highlighted = visited.has(label.adcode);
       if (national.value && !highlighted) {
         const level = levelOf(label.adcode);
-        if (ordinaryCount >= 10 ||
-            (level === 'city' && view.scale < 3) ||
-            (level === 'district' && view.scale < 7.5)) continue;
+        if ((nationalOverview && overviewLabels >= 10) ||
+            (level === 'city' && view.scale < cityZoom.value) ||
+            (level === 'district' && view.scale < districtZoom.value)) continue;
       }
       seen.add(label.adcode);
       const x = label.x * view.scale + view.x;
@@ -82,7 +78,7 @@ export function useMapDetail(map, view, children, isLit, areaId, levelOf) {
       if (x - halfWidth < left || x + halfWidth > right || y < top + 15 || y > bottom - 5) continue;
       if (result.some(other => Math.abs(other.y - y) < 18 && Math.abs(other.x - x) < other.halfWidth + halfWidth + 4)) continue;
       result.push({ ...label, x, y, halfWidth, highlighted });
-      if (!highlighted) ordinaryCount++;
+      if (nationalOverview && !highlighted) overviewLabels++;
     }
     return result;
   });

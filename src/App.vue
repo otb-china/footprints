@@ -6,6 +6,7 @@ import { useMapZoom } from './mapZoom.js';
 import { useMapDetail } from './mapDetail.js';
 
 const storageKey = 'footprints-v1';
+const logoUrl = import.meta.env.BASE_URL + 'footprints-logo.svg';
 const municipalities = new Set([110000, 120000, 310000, 500000]);
 const levels = new Set(['province', 'city', 'district']);
 const data = shallowRef(null);
@@ -25,10 +26,11 @@ try {
 const children = id => (data.value?.[id]?.children || []).filter(area => levels.has(area.level));
 const name = id => byId.value[id]?.name || '';
 const areaId = computed(() => trail.value.at(-1) || root);
+const mapSvg = ref(null);
 const {
-  view, transform, canZoomIn, canZoomOut, zoom, resetZoom,
+  view, viewport, transform, canZoomIn, canZoomOut, zoom, resetZoom,
   onWheel, onPointerDown, onPointerMove, onPointerEnd, onMapClick,
-} = useMapZoom(map, areaId);
+} = useMapZoom(map, areaId, mapSvg);
 const areas = computed(() => children(areaId.value));
 const provinces = computed(() => children(root));
 const records = computed(() => Object.entries(saved.value).reverse());
@@ -49,9 +51,10 @@ const cityHighlights = computed(() => {
 const isLit = id => areaId.value === root
   ? municipalities.has(id) && lit.value.has(id)
   : lit.value.has(id);
-const { detail, labels } = useMapDetail(map, view, children, isLit, areaId, id => byId.value[id]?.level);
+const { detail, labels } = useMapDetail(map, view, viewport, children, isLit, areaId, id => byId.value[id]?.level);
 const hint = computed(() => {
   if (!data.value) return '';
+  if (map.value && canZoomOut.value) return '拖动地图查看其他区域';
   if (areaId.value === root) return '点击省级地区，查看下一级';
   if (areas.value.some(area => area.level === 'city')) return '点击城市，查看区县';
   return '点击区县，新增或编辑足迹';
@@ -202,6 +205,7 @@ async function locate() {
   }
 }
 
+const settings = ref(null);
 const importer = ref(null);
 const importMode = ref('cities');
 const importSession = ref(0);
@@ -211,6 +215,7 @@ const importStatus = ref('');
 const importing = ref(false);
 
 function openImport(mode) {
+  settings.value.close();
   importMode.value = mode;
   importSession.value++;
   cityList.value = '';
@@ -274,13 +279,21 @@ function exportRecords() {
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   feedback.value = '已导出 ' + records.value.length + ' 条足迹。';
+  settings.value.close();
 }
 </script>
 
 <template>
   <header>
-    <h1 class="brand"><span aria-hidden="true">✦</span>我的足迹</h1>
-    <button class="primary" :disabled="!data" @click="openEditor()">＋ 新增足迹</button>
+    <h1 class="brand"><img :src="logoUrl" width="25" height="25" alt="">我的足迹</h1>
+    <button type="button" class="settings-toggle" aria-label="设置" title="设置"
+      aria-haspopup="dialog" @click="settings.showModal()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M10 3h4l.6 2.5 1.7 1 2.5-.7 2 3.5-1.9 1.8v1.8l1.9 1.8-2 3.5-2.5-.7-1.7 1-.6 2.5h-4l-.6-2.5-1.7-1-2.5.7-2-3.5 1.9-1.8v-1.8L3.2 9.3l2-3.5 2.5.7 1.7-1z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+    </button>
   </header>
   <main>
     <div class="layout">
@@ -295,10 +308,14 @@ function exportRecords() {
               </button>
             </template>
           </nav>
-          <span class="legend">已点亮</span>
+          <div class="map-bar-actions">
+            <span class="legend">已点亮</span>
+            <button type="button" class="add-footprint" aria-label="新增足迹" title="新增足迹"
+              :disabled="!data" @click="openEditor()">＋</button>
+          </div>
         </div>
         <div id="map" aria-label="行政区地图">
-          <svg v-if="map" :viewBox="map.viewBox" @wheel.prevent="onWheel"
+          <svg v-if="map" ref="mapSvg" :viewBox="map.viewBox" @wheel.prevent="onWheel"
             @pointerdown="onPointerDown" @pointermove="onPointerMove"
             @pointerup="onPointerEnd" @pointercancel="onPointerEnd" @lostpointercapture="onPointerEnd"
             @click.capture="onMapClick">
@@ -320,16 +337,16 @@ function exportRecords() {
             </g>
             <text v-for="label in labels" :key="label.adcode" :class="{ 'lit-label': label.highlighted }" :x="label.x" :y="label.y">{{ label.text }}</text>
           </svg>
-          <div v-if="map" class="map-controls" role="group" aria-label="地图缩放">
-            <button type="button" aria-label="放大地图" :disabled="!canZoomIn" @click="zoom(1)">＋</button>
-            <button type="button" aria-label="缩小地图" :disabled="!canZoomOut" @click="zoom(-1)">−</button>
-            <button type="button" aria-label="恢复地图全览" :disabled="!canZoomOut" @click="resetZoom">复位</button>
-          </div>
           <span v-else>{{ mapMessage }}</span>
         </div>
         <div class="bar foot">
           <span>{{ hint }}</span>
           <button v-if="areaId !== root" type="button" class="map-mark" @click="openEditor(areaId)">点亮这里</button>
+          <div v-if="map" class="map-controls" role="group" aria-label="地图缩放">
+            <button type="button" aria-label="放大地图" :disabled="!canZoomIn" @click="zoom(1)">＋</button>
+            <button type="button" aria-label="缩小地图" :disabled="!canZoomOut" @click="zoom(-1)">−</button>
+            <button type="button" aria-label="恢复地图全览" :disabled="!canZoomOut" @click="resetZoom">复位</button>
+          </div>
         </div>
         <details v-if="areas.length" class="region-list">
           <summary>地区列表</summary>
@@ -346,11 +363,6 @@ function exportRecords() {
           <div v-for="(label, index) in ['省级地区', '城市', '区县']" :key="label"><strong>{{ stats[index] }}</strong>{{ label }}</div>
         </div>
         <h2>点亮记录</h2>
-        <div class="record-actions">
-          <button :disabled="!data" @click="openImport('cities')">批量导入城市</button>
-          <button :disabled="!data" @click="openImport('backup')">导入备份</button>
-          <button @click="exportRecords">导出备份</button>
-        </div>
         <p v-if="feedback" role="status">{{ feedback }}</p>
         <div id="records">
           <p v-if="!records.length">还没有足迹。点击地图探索，或新增第一条记录。</p>
@@ -363,11 +375,23 @@ function exportRecords() {
     </div>
   </main>
 
+  <dialog ref="settings" class="settings-dialog" aria-labelledby="settings-title" closedby="any">
+    <div class="bar modalhead">
+      <h2 id="settings-title">更多操作</h2>
+      <button type="button" class="dialog-close" aria-label="关闭" autofocus @click="settings.close()">×</button>
+    </div>
+    <div class="settings-actions">
+      <button type="button" :disabled="!data" @click="openImport('cities')">批量导入城市</button>
+      <button type="button" :disabled="!data" @click="openImport('backup')">导入备份</button>
+      <button type="button" @click="exportRecords">导出备份</button>
+    </div>
+  </dialog>
+
   <dialog ref="editor" class="footprint-editor" aria-labelledby="editor-title" @close="closeEditor">
     <form @submit.prevent="saveFootprint">
       <div class="bar modalhead">
         <h2 id="editor-title">{{ editing ? '编辑足迹' : '新增足迹' }}</h2>
-        <button type="button" class="editor-close" aria-label="关闭" @click="editor.close()">×</button>
+        <button type="button" class="dialog-close" aria-label="关闭" @click="editor.close()">×</button>
       </div>
       <button class="locate" type="button" :disabled="locating" @click="locate">使用当前位置</button>
       <p id="status" role="status">{{ editorStatus }}</p>
