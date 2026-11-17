@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
+import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { coordinates, drawMap, match, readJson, root, shape } from './map.js';
 import { parseBackup, serializeBackup } from './backup.js';
 import { useMapZoom } from './mapZoom.js';
@@ -34,9 +34,27 @@ const {
 const areas = computed(() => children(areaId.value));
 const provinces = computed(() => children(root));
 const records = computed(() => Object.entries(saved.value).reverse());
-const stats = computed(() => ['p', 'c', 'd'].map(key =>
-  new Set(records.value.map(([, record]) => record[key]).filter(Boolean)).size
-));
+const levelTabs = ['省级地区', '城市', '区县'];
+const levelTab = ref(0);
+const scopedRecords = computed(() => areaId.value === root
+  ? records.value
+  : records.value.filter(([, { p, c, d }]) => [p, c, d].includes(areaId.value)));
+const levelAreas = computed(() => ['p', 'c', 'd'].map(key => {
+  const found = new Map();
+  for (const [, record] of scopedRecords.value) {
+    const id = record[key];
+    if (!id) continue;
+    if (!found.has(id)) found.set(id, { id, record: saved.value[id], count: 0 });
+    found.get(id).count++;
+  }
+  return [...found.values()];
+}));
+const stats = computed(() => levelAreas.value.map(list => list.length));
+const litProvinceCount = computed(() => new Set(records.value.map(([, record]) => record.p).filter(Boolean)).size);
+watch(areaId, id => {
+  const level = byId.value[id]?.level;
+  levelTab.value = id === root ? 0 : level === 'province' && !municipalities.has(id) ? 1 : 2;
+});
 const lit = computed(() => new Set(records.value.flatMap(([, { p, c, d }]) => [p, c, d])));
 const cityHighlights = computed(() => {
   if (areaId.value !== root) return null;
@@ -51,13 +69,14 @@ const cityHighlights = computed(() => {
 const isLit = id => areaId.value === root
   ? municipalities.has(id) && lit.value.has(id)
   : lit.value.has(id);
+const isVisitedProvince = id => areaId.value === root && !municipalities.has(id) && lit.value.has(id);
 const { detail, labels, markers, attractionData } = useMapDetail(map, view, viewport, children, isLit, areaId, id => byId.value[id]?.level);
 const hint = computed(() => {
   if (!data.value) return '';
   if (map.value && canZoomOut.value) return '拖动地图查看其他区域';
   if (areaId.value === root) return '点击省级地区，查看下一级';
   if (areas.value.some(area => area.level === 'city')) return '点击城市，查看区县';
-  return '点击区县，新增或编辑足迹';
+  return '点击区县，点亮或取消足迹';
 });
 
 onMounted(async () => {
@@ -89,7 +108,7 @@ watch([areaId, data, cityHighlights], async ([id, catalog, highlights], _, onCle
   ]);
   if (cancelled) return;
   map.value = drawMap(geo, areas.value, name, overlays.flat());
-  if (!map.value) mapMessage.value = '暂无该地区的地图边界，可在下方选择地区。';
+  if (!map.value) mapMessage.value = '暂无该地区的地图边界，可通过下方按钮直接点亮。';
 });
 
 function openArea(id) {
@@ -111,98 +130,112 @@ function persist(records) {
   saved.value = records;
 }
 
-const editor = ref(null);
-const editing = ref(null);
-const draft = reactive({ p: '', c: '', d: '', date: '', note: '' });
-const cities = computed(() => children(draft.p).filter(area => area.level === 'city'));
-const districts = computed(() => children(draft.c || draft.p).filter(area => area.level === 'district'));
-const editorStatus = ref('');
-const locating = ref(false);
-let locationRequest = 0;
+const areaNote = ref('');
+watch(() => [areaId.value, saved.value[areaId.value]?.note], ([, value]) => { areaNote.value = value || ''; }, { immediate: true });
 
-function openEditor(id) {
+function saveNote(id, value) {
   const record = saved.value[id];
-  const { p, c, d } = record || regionFor(id);
-  editing.value = record ? id : null;
+  const text = value.trim();
+  if (!record || text === (record.note || '')) return;
+  try {
+    persist({ ...saved.value, [id]: { ...record, note: text } });
+    feedback.value = '备注已保存。';
+  } catch {
+    feedback.value = '浏览器无法保存备注，请检查存储权限。';
+  }
+}
+
+function localDate() {
   const today = new Date();
-  const localDate = [
+  return [
     today.getFullYear(),
     String(today.getMonth() + 1).padStart(2, '0'),
     String(today.getDate()).padStart(2, '0'),
   ].join('-');
-  Object.assign(draft, {
-    p: p || '',
-    c: c === p ? '' : c || '',
-    d: d || '',
-    date: record ? record.date || '' : localDate,
-    note: record?.note || '',
-  });
-  editorStatus.value = '';
-  editor.value.showModal();
 }
 
-function closeEditor() {
+const confirmer = ref(null);
+const target = ref(null);
+const locating = ref(false);
+const fromLocation = ref(false);
+const confirmStatus = ref('');
+const targetRecord = computed(() => target.value && saved.value[target.value.id]);
+let locationRequest = 0;
+
+function placeNames(id) {
+  const { p, c, d } = saved.value[id] || regionFor(id);
+  return [...new Set([p, c, d || id].filter(Boolean))].map(name);
+}
+
+function openEditor(id) {
+  locationRequest++;
+  fromLocation.value = false;
+  locating.value = false;
+  confirmStatus.value = '';
+  target.value = { id, names: placeNames(id) };
+  confirmer.value.showModal();
+}
+
+function openLocator() {
+  fromLocation.value = true;
+  confirmer.value.showModal();
+  locate();
+}
+
+function closeConfirm() {
   locationRequest++;
   locating.value = false;
 }
 
-function saveFootprint() {
-  const id = draft.d || draft.c || draft.p;
-  if (!id) return;
-  if (saved.value[id] && id !== editing.value) {
-    editorStatus.value = '这里已经点亮，请从点亮记录中编辑原记录。';
-    return;
-  }
-  const next = { ...saved.value };
-  if (editing.value) delete next[editing.value];
-  next[id] = { ...regionFor(id), date: draft.date, note: draft.note.trim() };
-  finishEdit(next, '足迹已保存。');
-}
-
-function removeFootprint() {
-  const next = { ...saved.value };
-  delete next[editing.value];
-  finishEdit(next, '已取消点亮。');
-}
-
-function finishEdit(next, message) {
-  try {
-    persist(next);
-    feedback.value = message;
-    editor.value.close();
-  } catch {
-    editorStatus.value = '浏览器无法保存足迹，请检查存储权限。';
-  }
-}
-
 async function locate() {
   const request = ++locationRequest;
-  const current = () => request === locationRequest && editor.value.open;
+  const current = () => request === locationRequest && confirmer.value.open;
   locating.value = true;
-  editorStatus.value = '正在获取定位…';
+  target.value = null;
+  confirmStatus.value = '';
   try {
-    if (!navigator.geolocation) throw new Error('当前浏览器无法定位，请手动选择。');
+    if (!navigator.geolocation) throw new Error('当前浏览器无法定位，可以在地图上点击地区来点亮。');
     const position = await new Promise((resolve, reject) => {
       navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 12000, maximumAge: 60000, enableHighAccuracy: true });
     });
     const point = coordinates(position.coords.longitude, position.coords.latitude);
     const p = match(await shape(root), point, root, byId.value);
-    if (!p) throw new Error('当前位置未匹配到地图区域，请手动选择。');
+    if (!p) throw new Error('当前位置不在地图范围内，可以在地图上点击地区来点亮。');
     const next = match(await shape(p), point, p, byId.value);
     const c = byId.value[next]?.level === 'city' ? next : undefined;
     const d = c ? match(await shape(c), point, c, byId.value) : next;
-    if (current()) {
-      Object.assign(draft, { p, c: c || '', d: d || '' });
-      editorStatus.value = '已匹配 ' + [p, c, d].filter(Boolean).map(name).join(' · ') + '，确认后保存。';
-    }
+    const id = d || c || p;
+    if (current()) target.value = { id, names: placeNames(id) };
   } catch (error) {
     if (current()) {
-      if (error.code === 1) editorStatus.value = '定位权限未开启，可以手动选择。';
-      else editorStatus.value = error.code ? '暂时无法获取定位，请重试或手动选择。' : error.message;
+      if (error.code === 1) confirmStatus.value = '定位权限未开启，请在浏览器中允许定位，或在地图上点击地区来点亮。';
+      else confirmStatus.value = error.code ? '暂时无法获取定位，请稍后重试。' : error.message;
     }
   } finally {
     if (current()) locating.value = false;
   }
+}
+
+function saveRecords(next, message) {
+  try {
+    persist(next);
+    feedback.value = message;
+    confirmer.value.close();
+  } catch {
+    confirmStatus.value = '浏览器无法保存足迹，请检查存储权限。';
+  }
+}
+
+function confirmAction() {
+  if (!target.value) {
+    locate();
+    return;
+  }
+  const { id, names } = target.value;
+  const next = { ...saved.value };
+  if (targetRecord.value) delete next[id];
+  else next[id] = { ...regionFor(id), date: localDate(), note: '' };
+  saveRecords(next, (targetRecord.value ? '已取消点亮 ' : '已点亮 ') + names.join(' · ') + '。');
 }
 
 const settings = ref(null);
@@ -285,7 +318,10 @@ function exportRecords() {
 
 <template>
   <header>
-    <h1 class="brand"><img :src="logoUrl" width="25" height="25" alt="">我的足迹</h1>
+    <h1 class="brand">
+      <img :src="logoUrl" width="32" height="32" alt="">
+      <span>我的足迹<small>点亮走过的省、市与区县</small></span>
+    </h1>
     <button type="button" class="settings-toggle" aria-label="设置" title="设置"
       aria-haspopup="dialog" @click="settings.showModal()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"
@@ -309,9 +345,18 @@ function exportRecords() {
             </template>
           </nav>
           <div class="map-bar-actions">
-            <span class="legend">已点亮</span>
-            <button type="button" class="add-footprint" aria-label="新增足迹" title="新增足迹"
-              :disabled="!data" @click="openEditor()">＋</button>
+            <span class="legend">
+              <span v-if="areaId === root" class="legend-item visited">到过的省份</span>
+              <span class="legend-item">{{ areaId === root ? '点亮城市' : '已点亮' }}</span>
+            </span>
+            <button type="button" class="add-footprint" aria-label="点亮当前位置" title="点亮当前位置"
+              :disabled="!data" @click="openLocator">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z" />
+                <circle cx="12" cy="10" r="2.3" />
+              </svg>
+            </button>
           </div>
         </div>
         <div id="map" aria-label="行政区地图">
@@ -322,7 +367,7 @@ function exportRecords() {
             <g :transform="transform">
               <template v-for="item in map.paths" :key="item.adcode">
                 <path v-if="item.outline" class="outline" :d="item.path" fill-rule="evenodd" />
-                <path v-else :class="{ lit: isLit(item.adcode) }" :d="item.path" fill-rule="evenodd"
+                <path v-else :class="{ lit: isLit(item.adcode), visited: isVisitedProvince(item.adcode) }" :d="item.path" fill-rule="evenodd"
                   tabindex="0" role="button" :aria-label="name(item.adcode)" @click="openArea(item.adcode)"
                   @keydown.enter.prevent="openArea(item.adcode)" @keydown.space.prevent="openArea(item.adcode)">
                   <title>{{ name(item.adcode) }}</title>
@@ -343,112 +388,203 @@ function exportRecords() {
               <text v-if="marker.label" :x="marker.labelBox.x" :y="marker.labelBox.y">{{ marker.label }}</text>
             </g>
           </svg>
-          <span v-else>{{ mapMessage }}</span>
+          <span v-else class="map-message" :class="{ loading: mapMessage.startsWith('正在加载') }">{{ mapMessage }}</span>
+          <div v-if="map" class="map-controls" role="group" aria-label="地图缩放">
+            <button type="button" aria-label="放大地图" title="放大" :disabled="!canZoomIn" @click="zoom(1)">＋</button>
+            <button type="button" aria-label="缩小地图" title="缩小" :disabled="!canZoomOut" @click="zoom(-1)">−</button>
+            <button type="button" aria-label="恢复地图全览" title="复位" :disabled="!canZoomOut" @click="resetZoom">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+              </svg>
+            </button>
+          </div>
         </div>
         <div class="bar foot">
-          <span>{{ hint }}</span>
-          <button v-if="areaId !== root" type="button" class="map-mark" @click="openEditor(areaId)">点亮这里</button>
-          <div v-if="map" class="map-controls" role="group" aria-label="地图缩放">
-            <button type="button" aria-label="放大地图" :disabled="!canZoomIn" @click="zoom(1)">＋</button>
-            <button type="button" aria-label="缩小地图" :disabled="!canZoomOut" @click="zoom(-1)">−</button>
-            <button type="button" aria-label="恢复地图全览" :disabled="!canZoomOut" @click="resetZoom">复位</button>
-          </div>
+          <span v-if="saved[areaId]" class="lit-note">
+            <strong>已点亮</strong>{{ saved[areaId].date ? '到访于 ' + saved[areaId].date : '' }}
+          </span>
+          <span v-else class="hint">{{ hint }}</span>
+          <template v-if="areaId !== root">
+            <button v-if="saved[areaId]" type="button" class="map-mark danger" @click="openEditor(areaId)">取消点亮</button>
+            <button v-else type="button" class="map-mark" @click="openEditor(areaId)">点亮{{ name(areaId) }}</button>
+          </template>
+          <input v-if="saved[areaId]" v-model="areaNote" class="area-note" type="text" maxlength="300"
+            placeholder="写点备注，比如和谁一起、印象最深的事" aria-label="备注" enterkeyhint="done"
+            @change="saveNote(areaId, areaNote)" @keydown.enter="$event.target.blur()">
         </div>
         <p v-if="markers.length && attractionData" class="map-credit">
           景点数据来自 <a :href="attractionData.source" target="_blank" rel="noopener">Lore Routes</a>
           · <a :href="attractionData.licenseUrl" target="_blank" rel="noopener">{{ attractionData.license }}</a>
         </p>
-        <details v-if="areas.length" class="region-list">
-          <summary>地区列表</summary>
-          <div id="regions">
-            <button v-for="area in areas" :key="area.adcode" :class="{ lit: isLit(area.adcode) }" @click="openArea(area.adcode)">
-              {{ area.name }}
-            </button>
-          </div>
-        </details>
       </section>
       <aside class="panel side">
         <h2>足迹概览</h2>
-        <div class="stats">
-          <div v-for="(label, index) in ['省级地区', '城市', '区县']" :key="label"><strong>{{ stats[index] }}</strong>{{ label }}</div>
+        <div class="stats" role="tablist" aria-label="按层级查看足迹">
+          <button v-for="(label, index) in levelTabs" :key="label" type="button" role="tab"
+            :class="{ active: levelTab === index }" :aria-selected="levelTab === index" @click="levelTab = index">
+            <strong>{{ stats[index] }}</strong>{{ label }}
+          </button>
         </div>
-        <h2>点亮记录</h2>
+        <div v-if="provinces.length" class="progress">
+          <div class="progress-text">
+            <span>省级地区覆盖</span>
+            <span>{{ litProvinceCount }} / {{ provinces.length }}</span>
+          </div>
+          <div class="progress-track" role="progressbar" aria-label="省级地区覆盖" :aria-valuenow="litProvinceCount"
+            aria-valuemin="0" :aria-valuemax="provinces.length">
+            <span :style="{ width: Math.min(100, litProvinceCount / provinces.length * 100) + '%' }"></span>
+          </div>
+        </div>
+        <h2 class="records-title">
+          {{ (areaId === root ? '' : name(areaId) + ' · ') + '点亮的' + levelTabs[levelTab] }}
+          <span v-if="levelAreas[levelTab].length" class="count">{{ levelAreas[levelTab].length }}</span>
+        </h2>
         <p v-if="feedback" role="status">{{ feedback }}</p>
         <div id="records">
-          <p v-if="!records.length">还没有足迹。点击地图探索，或新增第一条记录。</p>
-          <button v-for="[id, record] in records" :key="id" class="entry" :disabled="!data" @click="openEditor(Number(id))">
-            {{ [...new Set([record.p, record.c, record.d].filter(Boolean))].map(name).join(' · ') }}
-            <small>{{ [record.date, record.note].filter(Boolean).join(' · ') || '编辑足迹' }}</small>
-          </button>
+          <p v-if="!levelAreas[levelTab].length" class="empty">
+            {{ records.length ? '这里还没有点亮的' + levelTabs[levelTab] + '，点击地图来点亮。' : '还没有足迹。点击地图探索，或点亮当前位置。' }}
+          </p>
+          <div v-for="item in levelAreas[levelTab]" :key="item.id" class="entry">
+            <div class="entry-head">
+              <span class="entry-title">{{ areaId === root ? placeNames(item.id).join(' · ') : name(item.id) }}</span>
+              <button v-if="item.record" type="button" class="entry-remove" aria-label="取消点亮" title="取消点亮"
+                :disabled="!data" @click="openEditor(item.id)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                  stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17" /></svg>
+              </button>
+            </div>
+            <template v-if="item.record">
+              <small v-if="item.record.date">到访于 {{ item.record.date }}</small>
+              <input :key="item.record.note" class="entry-note" type="text" maxlength="300" :value="item.record.note"
+                placeholder="添加备注" aria-label="备注" enterkeyhint="done"
+                @change="saveNote(item.id, $event.target.value)" @keydown.enter="$event.target.blur()">
+            </template>
+            <small v-else>由 {{ item.count }} 条下级足迹点亮</small>
+          </div>
         </div>
       </aside>
     </div>
   </main>
 
-  <dialog ref="settings" class="settings-dialog" aria-labelledby="settings-title" closedby="any">
-    <div class="bar modalhead">
-      <h2 id="settings-title">更多操作</h2>
-      <button type="button" class="dialog-close" aria-label="关闭" autofocus @click="settings.close()">×</button>
+  <dialog ref="settings" class="sheet" aria-labelledby="settings-title" closedby="any">
+    <div class="dialog-head">
+      <div>
+        <h2 id="settings-title">更多操作</h2>
+        <p>导入或导出你的足迹数据</p>
+      </div>
+      <button type="button" class="dialog-close" aria-label="关闭" autofocus @click="settings.close()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+          stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+      </button>
     </div>
-    <div class="settings-actions">
-      <button type="button" :disabled="!data" @click="openImport('cities')">批量导入城市</button>
-      <button type="button" :disabled="!data" @click="openImport('backup')">导入备份</button>
-      <button type="button" @click="exportRecords">导出备份</button>
+    <div class="settings-grid">
+      <button type="button" class="settings-item" :disabled="!data" @click="openImport('cities')">
+        <span class="settings-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z" />
+            <circle cx="12" cy="10" r="2.3" />
+          </svg>
+        </span>
+        <span>
+          <strong>批量导入城市</strong>
+          <em>粘贴城市名单，一次点亮多个城市</em>
+        </span>
+      </button>
+      <button type="button" class="settings-item" :disabled="!data" @click="openImport('backup')">
+        <span class="settings-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 15V4m-4.5 4.5L12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+          </svg>
+        </span>
+        <span>
+          <strong>导入备份</strong>
+          <em>将备份与本地足迹合并</em>
+        </span>
+      </button>
+      <button type="button" class="settings-item" @click="exportRecords">
+        <span class="settings-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+          </svg>
+        </span>
+        <span>
+          <strong>导出备份</strong>
+          <em>下载 {{ records.length }} 条足迹的备份文件</em>
+        </span>
+      </button>
     </div>
   </dialog>
 
-  <dialog ref="editor" class="footprint-editor" aria-labelledby="editor-title" @close="closeEditor">
-    <form @submit.prevent="saveFootprint">
-      <div class="bar modalhead">
-        <h2 id="editor-title">{{ editing ? '编辑足迹' : '新增足迹' }}</h2>
-        <button type="button" class="dialog-close" aria-label="关闭" @click="editor.close()">×</button>
-      </div>
-      <button class="locate" type="button" :disabled="locating" @click="locate">使用当前位置</button>
-      <p id="status" role="status">{{ editorStatus }}</p>
-      <div class="editor-fields">
-        <label>省份
-          <select v-model="draft.p" required @change="draft.c = draft.d = ''">
-            <option value="">请选择省份</option>
-            <option v-for="area in provinces" :key="area.adcode" :value="area.adcode">{{ area.name }}</option>
-          </select>
-        </label>
-        <label>城市
-          <select v-model="draft.c" :disabled="!cities.length" @change="draft.d = ''">
-            <option value="">选择城市</option>
-            <option v-for="area in cities" :key="area.adcode" :value="area.adcode">{{ area.name }}</option>
-          </select>
-        </label>
-        <label>区县
-          <select v-model="draft.d" :disabled="!districts.length">
-            <option value="">选择区县</option>
-            <option v-for="area in districts" :key="area.adcode" :value="area.adcode">{{ area.name }}</option>
-          </select>
-        </label>
-        <label>到访日期<input v-model="draft.date" type="date"></label>
-        <label>备注<textarea v-model="draft.note" rows="2" maxlength="300"></textarea></label>
-      </div>
-      <div class="actions">
-        <button v-if="editing" type="button" @click="removeFootprint">取消点亮</button>
-        <button class="primary" type="submit">保存</button>
-      </div>
-    </form>
+  <dialog ref="confirmer" class="confirm-dialog" aria-labelledby="confirm-title" closedby="any" @close="closeConfirm">
+    <span class="confirm-icon" :class="{ locating, failed: !locating && !target, lit: targetRecord }">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z" />
+        <circle cx="12" cy="10" r="2.3" />
+      </svg>
+    </span>
+    <h2 id="confirm-title">
+      {{ locating ? '正在定位…' : !target ? '定位失败' : targetRecord ? '取消点亮？' : fromLocation ? '点亮当前位置？' : '点亮这里？' }}
+    </h2>
+    <p v-if="target" class="confirm-place">{{ target.names.join(' · ') }}</p>
+    <p class="confirm-text" role="status">
+      {{ locating ? '正在获取你所在的地区，请稍候'
+        : confirmStatus || (targetRecord
+          ? '取消后，这里的到访日期和备注会一并删除'
+
+          : '到访日期记为今天') }}
+    </p>
+    <div class="confirm-actions">
+      <button type="button" class="ghost-button" @click="confirmer.close()">{{ targetRecord ? '保留' : '取消' }}</button>
+      <button v-if="!locating && (target || fromLocation)" type="button" class="submit-button"
+        :class="{ danger: targetRecord }" @click="confirmAction">
+        {{ !target ? '重试' : targetRecord ? '取消点亮' : '点亮' }}
+      </button>
+    </div>
   </dialog>
 
-  <dialog ref="importer" @cancel="importing && $event.preventDefault()">
+  <dialog ref="importer" class="sheet" aria-labelledby="importer-title" @cancel="importing && $event.preventDefault()">
     <form @submit.prevent="importRecords">
-      <div class="bar modalhead">
-        <h2>{{ importMode === 'cities' ? '批量点亮城市' : '导入足迹备份' }}</h2>
-        <button type="button" aria-label="关闭" :disabled="importing" @click="importer.close()">×</button>
+      <div class="dialog-head">
+        <div>
+          <h2 id="importer-title">{{ importMode === 'cities' ? '批量点亮城市' : '导入足迹备份' }}</h2>
+          <p>导入会与本地足迹合并，已有记录保留本地日期和备注。</p>
+        </div>
+        <button type="button" class="dialog-close" aria-label="关闭" :disabled="importing" @click="importer.close()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+          stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
       </div>
-      <label v-if="importMode === 'cities'">粘贴城市名单，可用顿号、逗号或换行分隔
+      <div v-if="records.length" class="summary-card">
+        <strong>当前数据</strong>
+        <span>{{ records.length }} 条本地足迹</span>
+      </div>
+      <label v-if="importMode === 'cities'" class="field-row">
+        <span>城市名单<em>可用顿号、逗号或换行分隔</em></span>
         <textarea v-model="cityList" rows="5" placeholder="北京市、杭州市、广州市" required></textarea>
       </label>
-      <label v-else>选择本项目导出的 JSON 文件
-        <input :key="importSession" type="file" accept=".json,application/json" :disabled="importing" required @change="importFile = $event.target.files[0]">
+      <label v-else class="file-upload-card" :class="{ disabled: importing }">
+        <input :key="importSession" class="file-input" type="file" accept=".json,application/json"
+          :disabled="importing" @change="importFile = $event.target.files[0]; importStatus = ''">
+        <span class="settings-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 15V4m-4.5 4.5L12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+          </svg>
+        </span>
+        <span>
+          <strong>{{ importFile?.name || '选择备份文件' }}</strong>
+          <em>{{ importFile ? '文件已选择，点击下方按钮导入' : '支持本项目导出的 .json 备份文件' }}</em>
+        </span>
       </label>
-      <p>导入会合并足迹，已有记录保留本地日期和备注。</p>
-      <p v-if="importStatus" role="alert">{{ importStatus }}</p>
-      <div class="actions"><button class="primary" type="submit" :disabled="importing">{{ importing ? '正在导入…' : '导入并点亮' }}</button></div>
+      <p v-if="importStatus" class="error" role="alert">{{ importStatus }}</p>
+      <button class="submit-button" type="submit" :disabled="importing || (importMode === 'backup' && !importFile)">
+        {{ importing ? '正在导入…' : importMode === 'cities' ? '导入并点亮' : '合并导入' }}
+      </button>
     </form>
   </dialog>
 </template>
