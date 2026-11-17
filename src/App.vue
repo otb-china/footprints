@@ -32,10 +32,13 @@ const {
   onWheel, onPointerDown, onPointerMove, onPointerEnd, onMapClick,
 } = useMapZoom(map, areaId, mapSvg);
 const areas = computed(() => children(areaId.value));
-const provinces = computed(() => children(root));
 const records = computed(() => Object.entries(saved.value).reverse());
 const levelTabs = ['省级地区', '城市', '区县'];
 const levelTab = ref(0);
+const mapLevelTab = computed(() => {
+  if (areaId.value === root) return 0;
+  return areas.value[0]?.level === 'city' ? 1 : 2;
+});
 const scopedRecords = computed(() => areaId.value === root
   ? records.value
   : records.value.filter(([, { p, c, d }]) => [p, c, d].includes(areaId.value)));
@@ -50,12 +53,12 @@ const levelAreas = computed(() => ['p', 'c', 'd'].map(key => {
   return [...found.values()];
 }));
 const stats = computed(() => levelAreas.value.map(list => list.length));
-const litProvinceCount = computed(() => new Set(records.value.map(([, record]) => record.p).filter(Boolean)).size);
-watch(areaId, id => {
-  const level = byId.value[id]?.level;
-  levelTab.value = id === root ? 0 : level === 'province' && !municipalities.has(id) ? 1 : 2;
+watch(areaId, () => {
+  levelTab.value = mapLevelTab.value;
 });
 const lit = computed(() => new Set(records.value.flatMap(([, { p, c, d }]) => [p, c, d])));
+const coverageLabel = computed(() => levelTabs[mapLevelTab.value] + '覆盖');
+const coveredAreaCount = computed(() => areas.value.filter(area => lit.value.has(area.adcode)).length);
 const cityHighlights = computed(() => {
   if (areaId.value !== root) return null;
   const byProvince = new Map();
@@ -419,21 +422,21 @@ function exportRecords() {
         </p>
       </section>
       <aside class="panel side">
-        <h2>足迹概览</h2>
-        <div class="stats" role="tablist" aria-label="按层级查看足迹">
+        <h2 v-if="areaId === root">足迹概览</h2>
+        <div v-if="areaId === root" class="stats" role="tablist" aria-label="按层级查看足迹">
           <button v-for="(label, index) in levelTabs" :key="label" type="button" role="tab"
             :class="{ active: levelTab === index }" :aria-selected="levelTab === index" @click="levelTab = index">
             <strong>{{ stats[index] }}</strong>{{ label }}
           </button>
         </div>
-        <div v-if="provinces.length" class="progress">
+        <div v-if="areas.length" class="progress">
           <div class="progress-text">
-            <span>省级地区覆盖</span>
-            <span>{{ litProvinceCount }} / {{ provinces.length }}</span>
+            <span>{{ coverageLabel }}</span>
+            <span>{{ coveredAreaCount }} / {{ areas.length }}</span>
           </div>
-          <div class="progress-track" role="progressbar" aria-label="省级地区覆盖" :aria-valuenow="litProvinceCount"
-            aria-valuemin="0" :aria-valuemax="provinces.length">
-            <span :style="{ width: Math.min(100, litProvinceCount / provinces.length * 100) + '%' }"></span>
+          <div class="progress-track" role="progressbar" :aria-label="coverageLabel" :aria-valuenow="coveredAreaCount"
+            aria-valuemin="0" :aria-valuemax="areas.length">
+            <span :style="{ width: coveredAreaCount / areas.length * 100 + '%' }"></span>
           </div>
         </div>
         <h2 class="records-title">
