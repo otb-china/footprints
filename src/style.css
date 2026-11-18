@@ -45,11 +45,7 @@ header {
   align-items: center;
   justify-content: space-between;
   padding: 10px max(4vw, calc((100vw - 1260px) / 2));
-  border-bottom: 1px solid var(--line);
-  background: rgb(255 255 255 / 88%);
-  box-shadow: var(--shadow);
-  backdrop-filter: saturate(1.6) blur(14px);
-  -webkit-backdrop-filter: saturate(1.6) blur(14px);
+  background: var(--bg);
 }
 .brand { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--text-strong); font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
 .brand img { border-radius: 11px; box-shadow: 0 4px 12px rgba(38, 56, 88, 0.1); }
