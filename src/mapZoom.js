@@ -111,8 +111,7 @@ export function useMapZoom(map, areaId, svg) {
     } else {
       if (!moved && distance(start, next) < 5) return;
       moved = true;
-      const destination = event.pointerType === 'touch' ? { x: next.x, y: previous.y } : next;
-      moveView(1, point(svg, previous), point(svg, destination));
+      moveView(1, point(svg, previous), point(svg, next));
     }
     pointers.set(event.pointerId, next);
   }

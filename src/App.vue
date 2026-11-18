@@ -442,7 +442,7 @@ function exportRecords() {
           </div>
         </div>
         <div id="map" aria-label="行政区地图">
-          <svg v-if="map" ref="mapSvg" :viewBox="map.viewBox" @wheel.prevent="onWheel"
+          <svg v-if="map" ref="mapSvg" :class="{ 'is-zoomed': canZoomOut }" :viewBox="map.viewBox" @wheel.prevent="onWheel"
             @pointerdown="onPointerDown" @pointermove="onPointerMove"
             @pointerup="onPointerEnd" @pointercancel="onPointerEnd" @lostpointercapture="onPointerEnd"
             @click.capture="onMapClick">
