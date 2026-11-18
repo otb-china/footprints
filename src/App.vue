@@ -25,6 +25,8 @@ try {
 
 const children = id => (data.value?.[id]?.children || []).filter(area => levels.includes(area.level));
 const name = id => byId.value[id]?.name || '';
+const canMark = id => municipalities.has(id) || ['city', 'district'].includes(byId.value[id]?.level);
+const isLocalFootprint = ({ c, d }) => Boolean(c || d);
 const areaId = computed(() => trail.value.at(-1) || root);
 const mapSvg = ref(null);
 const {
@@ -32,7 +34,7 @@ const {
   onWheel, onPointerDown, onPointerMove, onPointerEnd, onMapClick,
 } = useMapZoom(map, areaId, mapSvg);
 const areas = computed(() => children(areaId.value));
-const records = computed(() => Object.entries(saved.value).reverse());
+const records = computed(() => Object.entries(saved.value).filter(([, record]) => isLocalFootprint(record)).reverse());
 const levelTabs = ['省级地区', '城市', '区县'];
 const levelTab = ref(0);
 const mapLevelTab = computed(() => {
@@ -47,7 +49,7 @@ const levelAreas = computed(() => ['p', 'c', 'd'].map(key => {
   for (const [, record] of scopedRecords.value) {
     const id = record[key];
     if (!id) continue;
-    if (!found.has(id)) found.set(id, { id, record: saved.value[id], count: 0 });
+    if (!found.has(id)) found.set(id, { id, record: canMark(id) ? saved.value[id] : undefined, count: 0 });
     found.get(id).count++;
   }
   return [...found.values()];
@@ -67,6 +69,12 @@ const coverageAreas = computed(() => {
 const coverageTotal = computed(() => coverageAreas.value.length);
 const coveredAreaCount = computed(() => coverageAreas.value.filter(area => lit.value.has(area.adcode)).length);
 const coveragePercent = computed(() => coverageTotal.value ? coveredAreaCount.value / coverageTotal.value * 100 : 0);
+const coveragePercentText = computed(() => {
+  const value = coveragePercent.value;
+  if (!value || value >= 100) return String(Math.round(value));
+  return value < 10 ? value.toFixed(1) : String(Math.floor(value));
+});
+const coverageRemaining = computed(() => coverageTotal.value - coveredAreaCount.value);
 const cityHighlights = computed(() => {
   if (areaId.value !== root) return null;
   const byProvince = new Map();
@@ -81,14 +89,14 @@ const isLit = id => areaId.value === root
   ? municipalities.has(id) && lit.value.has(id)
   : lit.value.has(id);
 const isVisitedProvince = id => areaId.value === root && !municipalities.has(id) && lit.value.has(id);
-const canNote = id => municipalities.has(id) || ['city', 'district'].includes(byId.value[id]?.level);
 const { detail, labels, markers, attractionData } = useMapDetail(map, view, viewport, children, isLit, areaId, id => byId.value[id]?.level);
 const hint = computed(() => {
   if (!data.value) return '';
   if (map.value && canZoomOut.value) return '拖动地图查看其他区域';
   if (areaId.value === root) return '点击省级地区，查看下一级';
   if (areas.value.some(area => area.level === 'city')) return '点击城市，查看区县';
-  return '点击区县，点亮或取消足迹';
+  if (areas.value.length) return '点击区县，点亮或取消足迹';
+  return '';
 });
 
 onMounted(async () => {
@@ -121,11 +129,15 @@ watch([areaId, data, cityHighlights], async ([id, catalog, highlights], _, onCle
   ]);
   if (cancelled) return;
   map.value = drawMap(geo, areas.value, name, overlays.flat());
-  if (!map.value) mapMessage.value = '暂无该地区的地图边界，可通过下方按钮直接点亮。';
+  if (!map.value) {
+    mapMessage.value = canMark(id)
+      ? '暂无该地区的地图边界，可通过下方按钮直接点亮。'
+      : areas.value.length ? '暂无该地区的地图边界。' : '暂无可点亮的下级地区。';
+  }
 });
 
 function openArea(id) {
-  if (children(id).length && byId.value[id].level !== 'district') trail.value.push(id);
+  if (!canMark(id) || (children(id).length && byId.value[id].level !== 'district')) trail.value.push(id);
   else openEditor(id);
 }
 
@@ -181,6 +193,7 @@ function placeNames(id) {
 }
 
 function openEditor(id) {
+  if (!canMark(id)) return;
   locationRequest++;
   fromLocation.value = false;
   locating.value = false;
@@ -189,7 +202,8 @@ function openEditor(id) {
   confirmer.value.showModal();
 }
 
-const coveredBy = id => ([key, { p, c, d }]) => key === String(id) || [p, c, d].includes(id);
+const coveredBy = id => ([key, record]) =>
+  isLocalFootprint(record) && (key === String(id) || [record.p, record.c, record.d].includes(id));
 
 function openRemove(id) {
   locationRequest++;
@@ -232,6 +246,7 @@ async function locate({ onEntry = false } = {}) {
     const d = c ? match(await shape(c), point, c, byId.value) : next;
     const id = d || c || p;
     if (!current()) return;
+    if (!canMark(id)) throw new Error('当前位置只定位到了省级地区，请在地图上选择城市或区县。');
     if (onEntry && (lit.value.has(id) || confirmer.value?.open || settings.value?.open || importer.value?.open)) return;
     target.value = { id, names: placeNames(id) };
     if (onEntry) {
@@ -270,6 +285,7 @@ function confirmAction() {
     saveRecords(next, '已删除 ' + names.join(' · ') + (count > 1 ? ' 及下级共 ' + count + ' 条足迹。' : ' 的足迹。'));
     return;
   }
+  if (!canMark(id)) return;
   const next = { ...saved.value };
   if (targetRecord.value) delete next[id];
   else next[id] = { ...regionFor(id), date: localDate(), note: '' };
@@ -381,7 +397,7 @@ function exportRecords() {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-  feedback.value = '已导出 ' + records.value.length + ' 条足迹。';
+  feedback.value = '已导出 ' + Object.keys(saved.value).length + ' 条足迹。';
   settings.value.close();
 }
 </script>
@@ -390,7 +406,7 @@ function exportRecords() {
   <header>
     <h1 class="brand">
       <img :src="logoUrl" width="32" height="32" alt="">
-      <span>我的足迹<small>点亮走过的省、市与区县</small></span>
+      <span>我的足迹<small>点亮走过的城市与区县</small></span>
     </h1>
     <button type="button" class="settings-toggle" aria-label="设置" title="设置"
       aria-haspopup="dialog" @click="settings.showModal()">
@@ -473,15 +489,16 @@ function exportRecords() {
         <div class="bar foot">
           <div class="area-status">
             <strong v-if="areaId !== root">
-              {{ name(areaId) }}<span v-if="saved[areaId]" class="lit-badge">已点亮</span>
+              {{ name(areaId) }}<span v-if="canMark(areaId) && saved[areaId]" class="lit-badge">已点亮</span>
+              <span v-else-if="!canMark(areaId) && lit.has(areaId)" class="lit-badge">已到访</span>
             </strong>
-            <span class="hint">{{ saved[areaId]?.date ? '到访于 ' + saved[areaId].date : hint }}</span>
+            <span class="hint">{{ canMark(areaId) && saved[areaId]?.date ? '到访于 ' + saved[areaId].date : hint }}</span>
           </div>
-          <template v-if="areaId !== root">
+          <template v-if="canMark(areaId)">
             <button v-if="saved[areaId]" type="button" class="map-mark danger" @click="openEditor(areaId)">取消点亮</button>
             <button v-else type="button" class="map-mark" @click="openEditor(areaId)">点亮</button>
           </template>
-          <input v-if="saved[areaId] && canNote(areaId)" v-model="areaNote" class="area-note" type="text" maxlength="300"
+          <input v-if="saved[areaId] && canMark(areaId)" v-model="areaNote" class="area-note" type="text" maxlength="300"
             placeholder="写点备注，比如和谁一起、印象最深的事" aria-label="备注" enterkeyhint="done"
             @change="saveNote(areaId, areaNote)" @keydown.enter="$event.target.blur()">
         </div>
@@ -495,24 +512,30 @@ function exportRecords() {
           </button>
         </div>
         <div v-if="coverageTotal" class="progress">
-          <div class="progress-text">
-            <span>{{ coverageLabel }}</span>
-            <span><strong>{{ coveredAreaCount }}</strong> / {{ coverageTotal }}</span>
-            <em>{{ Math.round(coveragePercent) }}%</em>
+          <div class="progress-head">
+            <span class="progress-label">{{ coverageLabel }}</span>
+            <span class="progress-count"><strong>{{ coveredAreaCount }}</strong> / {{ coverageTotal }}</span>
+          </div>
+          <div class="progress-main">
+            <strong class="progress-percent">{{ coveragePercentText }}<small>%</small></strong>
+            <span class="progress-remain">{{ coverageRemaining ? '还有 ' + coverageRemaining + ' 个待点亮' : '已全部点亮' }}</span>
           </div>
           <div class="progress-track" role="progressbar" :aria-label="coverageLabel" :aria-valuenow="coveredAreaCount"
-            aria-valuemin="0" :aria-valuemax="coverageTotal">
-            <span :style="{ width: coveragePercent + '%' }"></span>
+            aria-valuemin="0" :aria-valuemax="coverageTotal" :aria-valuetext="coveredAreaCount + ' / ' + coverageTotal">
+            <span v-if="coveredAreaCount" :class="{ done: !coverageRemaining }"
+              :style="{ width: 'max(10px, ' + coveragePercent + '%)' }"></span>
           </div>
         </div>
         <h2 class="records-title">
-          {{ (areaId === root ? '' : name(areaId) + ' · ') + '点亮的' + levelTabs[levelTab] }}
+          {{ levelTab === 0 ? '到访的省级地区' : (areaId === root ? '' : name(areaId) + ' · ') + '点亮的' + levelTabs[levelTab] }}
           <span v-if="levelAreas[levelTab].length" class="count">{{ levelAreas[levelTab].length }}</span>
         </h2>
         <p v-if="feedback" role="status">{{ feedback }}</p>
         <div id="records">
           <p v-if="!levelAreas[levelTab].length" class="empty">
-            {{ records.length ? '这里还没有点亮的' + levelTabs[levelTab] + '，点击地图来点亮。' : '还没有足迹。点击地图探索，或点亮当前位置。' }}
+            {{ levelTab === 0 ? '点亮城市或区县后，会自动计入所属省级地区。'
+              : records.length ? '这里还没有点亮的' + levelTabs[levelTab] + '，点击地图来点亮。'
+              : '还没有足迹。点击地图探索，或点亮当前位置。' }}
           </p>
           <div v-for="item in levelAreas[levelTab]" :key="item.id" class="swipe">
             <span class="swipe-delete" aria-hidden="true">删除</span>
@@ -522,11 +545,11 @@ function exportRecords() {
               <span class="entry-title">{{ areaId === root ? placeNames(item.id).join(' · ') : name(item.id) }}</span>
               <template v-if="item.record">
                 <small v-if="item.record.date">到访于 {{ item.record.date }}</small>
-                <input v-if="levelTab !== 0 && canNote(item.id)" :key="item.record.note" class="entry-note" type="text" maxlength="300" :value="item.record.note"
+                <input v-if="levelTab !== 0 && canMark(item.id)" :key="item.record.note" class="entry-note" type="text" maxlength="300" :value="item.record.note"
                   placeholder="添加备注" aria-label="备注" enterkeyhint="done"
                   @change="saveNote(item.id, $event.target.value)" @keydown.enter="$event.target.blur()">
               </template>
-              <small v-else>由 {{ item.count }} 条下级足迹点亮</small>
+              <small v-else>{{ item.count }} 条下级足迹</small>
             </div>
           </div>
         </div>
