@@ -51,7 +51,7 @@ header {
 .brand img { border-radius: 11px; box-shadow: 0 4px 12px rgba(38, 56, 88, 0.1); }
 .brand span { display: grid; line-height: 1.2; }
 .brand small { color: var(--muted); font-size: 12px; font-weight: 400; letter-spacing: 0; }
-.settings-toggle { display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 12px; background: var(--surface-muted); color: var(--accent); }
+.settings-toggle { display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 12px; background: var(--surface); box-shadow: 0 2px 10px rgba(20, 40, 62, 0.06); color: var(--accent); }
 .settings-toggle:hover:not(:disabled) { background: var(--accent-soft); }
 .settings-toggle svg { width: 19px; height: 19px; transition: transform .3s ease; }
 .settings-toggle:hover svg { transform: rotate(45deg); }
