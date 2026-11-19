@@ -650,8 +650,8 @@ function exportRecords() {
                       <small v-if="place.context" :title="place.context">{{ place.context }}</small>
                     </span>
                     <small v-if="!canSelectPlace(place)" class="place-search-tag">暂无法点亮</small>
-                    <small v-else-if="place.attraction && markedAttractionIds.has(place.key)" class="place-search-tag lit">景点已点亮</small>
-                    <small v-else-if="saved[place.id]" class="place-search-tag lit">地区已点亮</small>
+                    <small v-else-if="place.isPoint && markedAttractionIds.has(place.key)" class="place-search-tag lit">景点已点亮</small>
+                    <small v-else-if="!place.isPoint && saved[place.id]" class="place-search-tag lit">地区已点亮</small>
                   </button>
                 </li>
               </ul>
