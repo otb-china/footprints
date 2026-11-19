@@ -1,4 +1,6 @@
 export const root = 100000;
+export const isMapPoint = point => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite)
+  && Math.abs(point[0]) <= 180 && Math.abs(point[1]) <= 90;
 
 const cache = new Map();
 

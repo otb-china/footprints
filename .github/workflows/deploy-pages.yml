@@ -36,6 +36,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build site
+        env:
+          VITE_AMAP_KEY: ${{ vars.VITE_AMAP_KEY }}
+          VITE_AMAP_SERVICE_HOST: ${{ vars.VITE_AMAP_SERVICE_HOST }}
         run: pnpm run build --outDir _site
 
       - name: Upload Pages artifact

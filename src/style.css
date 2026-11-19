@@ -124,6 +124,53 @@ button:disabled { cursor: default; opacity: .5; }
   color: var(--accent);
 }
 .map-bar nav button:hover:not(:disabled) { border-color: transparent; background: var(--accent-soft); }
+.place-search { position: relative; flex: 1; min-width: 0; max-width: 340px; }
+.map-bar:has(.place-search) nav { flex: 0 0 auto; }
+.place-search-field { position: relative; color: var(--muted); }
+.place-search-field svg { position: absolute; top: 8px; left: 9px; width: 16px; height: 16px; pointer-events: none; }
+.place-search input {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px 0 30px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--control);
+  color: var(--text);
+  font-size: 16px;
+}
+.place-search input::placeholder { color: var(--muted); font-size: 13px; }
+.place-search-results {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  max-height: min(270px, 45dvh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(38, 56, 88, 0.14);
+}
+.place-search-results ul { margin: 0; padding: 0; list-style: none; }
+.place-search-results button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border-color: transparent;
+  font-size: 14px;
+  text-align: left;
+}
+.place-search-results button:focus-visible { outline-offset: -2px; }
+.place-search-name { display: grid; min-width: 0; overflow-wrap: anywhere; }
+.place-search-name small { color: var(--muted); }
+.place-search-lit { flex: none; color: #187556; }
+.place-search-results p { margin: 6px 8px; font-size: 12px; }
 .map-bar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; margin-left: auto; }
 .add-footprint {
   display: grid;
@@ -153,9 +200,6 @@ button:disabled { cursor: default; opacity: .5; }
 .foot .map-mark:hover:not(:disabled) { border: 0; background: var(--accent-gradient); filter: brightness(1.06); }
 .foot .map-mark.danger, .foot .map-mark.danger:hover:not(:disabled) { background: var(--danger-bg); color: var(--danger); box-shadow: none; }
 .foot .area-note { flex: 1 0 100%; height: 40px; font-size: 14px; }
-.data-credit { margin: 16px 0 0; color: var(--muted); font-size: 11px; text-align: center; }
-.data-credit a { color: inherit; }
-.data-credit a:hover { color: var(--accent); }
 
 
 #map {

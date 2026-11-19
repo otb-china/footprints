@@ -1,21 +1,13 @@
-import { computed, onMounted, shallowRef, watch } from 'vue';
-import { coordinates, readJson, root, shape } from './map.js';
+import { computed, shallowRef, watch } from 'vue';
+import { root, shape } from './map.js';
 
 const intersects = (bounds, [left, top, right, bottom]) =>
   bounds[0] <= right && bounds[2] >= left && bounds[1] <= bottom && bounds[3] >= top;
 const overlapsLabel = (a, b) =>
   Math.abs(a.y - b.y) < 18 && Math.abs(a.x - b.x) < a.halfWidth + b.halfWidth + 4;
 
-export function useMapDetail(map, view, viewport, children, isLit, areaId, levelOf) {
+export function useMapDetail(map, view, viewport, children, isLit, areaId, levelOf, markedAttractions) {
   const detail = shallowRef({ cities: [], districts: [] });
-  const attractionData = shallowRef(null);
-  onMounted(async () => {
-    try {
-      attractionData.value = await readJson('attractions.json');
-    } catch (error) {
-      console.warn('景点数据加载失败', error);
-    }
-  });
   const zoomedBounds = computed(() => viewport.value?.map((value, index) =>
     (value - (index % 2 ? view.y : view.x)) / view.scale
   ));
@@ -24,17 +16,14 @@ export function useMapDetail(map, view, viewport, children, isLit, areaId, level
   const cityZoom = computed(() => national.value ? 2.6 : 2);
   const districtZoom = computed(() => national.value ? 7 : 4);
   const projectedAttractions = computed(() => {
-    if (!map.value || !attractionData.value) return [];
+    if (!map.value) return [];
     const area = areaId.value;
-    return attractionData.value.places
+    return markedAttractions.value
       .filter(item => area === root || item.areas.includes(area))
-      .map(item => ({ ...item, point: map.value.projectPoint(coordinates(...item.location)) }));
+      .map(item => ({ ...item, point: map.value.projectPoint(item.point) }));
   });
   const markers = computed(() => {
     if (!map.value) return [];
-    const area = areaId.value;
-    const minZoom = national.value ? 4 : levelOf(area) === 'province' ? cityZoom.value : 1;
-    if (view.scale < minZoom) return [];
     const [left, top, right, bottom] = viewport.value;
     const result = [];
     const occupied = [];
@@ -126,5 +115,5 @@ export function useMapDetail(map, view, viewport, children, isLit, areaId, level
     return result;
   });
 
-  return { detail, labels, markers, attractionData };
+  return { detail, labels, markers };
 }

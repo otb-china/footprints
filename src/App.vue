@@ -1,10 +1,11 @@
 <script setup>
 import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { readStoredValue, StorageConflictError, storageKeys, writeStoredValues } from "./utils/toolStorage";
-import { coordinates, drawMap, match, readJson, root, shape } from './map.js';
+import { coordinates, drawMap, isMapPoint, match, readJson, root, shape } from './map.js';
 import { parseBackup, serializeBackup } from './backup.js';
 import { useMapZoom } from './mapZoom.js';
 import { useMapDetail } from './mapDetail.js';
+import { amapConfigured, getPlaceDetails, searchPlaces } from './placeSearch.js';
 
 const storageKey = storageKeys.records;
 const logoUrl = import.meta.env.BASE_URL + 'footprints-logo.svg';
@@ -33,6 +34,122 @@ try {
 const children = id => (data.value?.[id]?.children || []).filter(area => levels.includes(area.level));
 const name = id => byId.value[id]?.name || '';
 const canMark = id => municipalities.has(id) || ['city', 'district'].includes(byId.value[id]?.level);
+const searchQuery = ref('');
+const searchOpen = ref(false);
+const searchInput = ref(null);
+const onlinePlaces = shallowRef([]);
+const searchStatus = ref('');
+const resolvingPlace = ref(false);
+let searchRevision = 0;
+const searchLimit = 20;
+const showSearchResults = computed(() => searchOpen.value && Boolean(searchQuery.value.trim()));
+function indexPlace(place, areaCodes) {
+  const parents = areaCodes.map(name).filter(Boolean);
+  const path = [...parents, place.label];
+  const shortPath = path.map(part => part.replace(/(特别行政区|自治区|自治州|地区|省|市|区|县|盟|旗)$/, ''));
+  return { ...place, context: parents.join(' · '), path: path.join(''), shortPath: shortPath.join('') };
+}
+
+const searchIndex = computed(() => Object.values(byId.value).filter(area => canMark(area.adcode)).map(area =>
+  indexPlace({ key: area.adcode, id: area.adcode, label: area.name }, area.acroutes)));
+const searchResults = computed(() => {
+  const query = searchQuery.value.replace(/\s+/g, '');
+  if (!showSearchResults.value) return [];
+  const areas = searchIndex.value.flatMap(place => {
+    if (place.label === query) return [{ ...place, rank: 0 }];
+    if (place.label.startsWith(query)) return [{ ...place, rank: 1 }];
+    if (place.label.includes(query)) return [{ ...place, rank: 2 }];
+    if (place.path.includes(query) || place.shortPath.includes(query)) return [{ ...place, rank: 3 }];
+    return [];
+  }).sort((a, b) => a.rank - b.rank);
+  const seen = new Set(areas.filter(place => place.rank === 0).map(place => place.id + ':' + place.label));
+  const points = onlinePlaces.value.flatMap(tip => {
+    if (typeof tip?.name !== 'string' || !tip.name.trim()) return [];
+    const id = Number(tip.adcode);
+    const district = typeof tip.district === 'string' && tip.district.trim()
+      ? tip.district.trim() : canMark(id) ? placeNames(id).join(' · ') : '';
+    const address = typeof tip.address === 'string' ? tip.address.trim() : '';
+    const context = address.startsWith(district) ? address : [district, address].filter(Boolean).join(' · ');
+    const poiId = typeof tip.id === 'string' && tip.id.trim() ? tip.id : undefined;
+    const key = poiId ? 'amap:' + poiId : 'poi:' + [tip.name, id, context, tip.point].join(':');
+    const areaLabel = id + ':' + tip.name;
+    if (seen.has(key) || seen.has(areaLabel)) return [];
+    seen.add(key);
+    return [{ key, id, poiId, label: tip.name, context, isPoint: true, point: tip.point,
+      attraction: tip.attraction }];
+  });
+  return [...areas.filter(place => place.rank === 0), ...points, ...areas.filter(place => place.rank !== 0)];
+});
+
+watch([searchQuery, showSearchResults], ([value, visible], _, onCleanup) => {
+  searchRevision++;
+  onlinePlaces.value = [];
+  searchStatus.value = '';
+  resolvingPlace.value = false;
+  if (!visible || [...value.trim()].length < 2 || searchIndex.value.some(place => place.label === value.trim())) return;
+  if (!amapConfigured) {
+    searchStatus.value = '高德地点搜索尚未配置，可搜索城市或区县';
+    return;
+  }
+  searchStatus.value = '正在查询地点…';
+  const controller = new AbortController();
+  const timer = setTimeout(async () => {
+    try {
+      const places = await searchPlaces(value.trim(), controller.signal);
+      if (controller.signal.aborted) return;
+      onlinePlaces.value = places;
+      searchStatus.value = '';
+    } catch {
+      if (!controller.signal.aborted) searchStatus.value = '高德地点搜索暂不可用';
+    }
+  }, 700);
+  onCleanup(() => {
+    controller.abort();
+    clearTimeout(timer);
+  });
+});
+
+function closeSearch(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) searchOpen.value = false;
+}
+
+function dismissSearch() {
+  searchInput.value.focus();
+  searchOpen.value = false;
+}
+
+const canSelectPlace = place => canMark(place.id) || Boolean(place.point || place.poiId);
+
+async function selectSearchResult(place) {
+  if (!place || resolvingPlace.value || !canSelectPlace(place)) return;
+  const revision = searchRevision;
+  const stillSelecting = () => revision === searchRevision && showSearchResults.value;
+  let id = place.id;
+  let selected = place;
+  if (place.poiId && (place.attraction === undefined || !place.point || !canMark(id))) {
+    resolvingPlace.value = true;
+    const details = await getPlaceDetails(place.poiId).catch(() => undefined);
+    if (!stillSelecting()) return;
+    if (details) {
+      selected = { ...place, point: details.point || place.point, attraction: details.attraction ?? place.attraction };
+      if (!canMark(id)) id = Number(details.adcode);
+    }
+  }
+  if (!canMark(id) && selected.point) {
+    resolvingPlace.value = true;
+    id = await areaAtPoint(selected.point).catch(() => undefined);
+    if (!stillSelecting()) return;
+  }
+  resolvingPlace.value = false;
+  if (!canMark(id)) {
+    searchStatus.value = '无法识别此地点所属的城市或区县';
+    return;
+  }
+  dismissSearch();
+  searchQuery.value = '';
+  openEditor(id, selected.isPoint ? selected : undefined);
+}
+
 const isLocalFootprint = ({ c, d }) => Boolean(c || d);
 const areaId = computed(() => trail.value.at(-1) || root);
 const mapSvg = ref(null);
@@ -96,7 +213,13 @@ const isLit = id => areaId.value === root
   ? municipalities.has(id) && lit.value.has(id)
   : lit.value.has(id);
 const isVisitedProvince = id => areaId.value === root && !municipalities.has(id) && lit.value.has(id);
-const { detail, labels, markers, attractionData } = useMapDetail(map, view, viewport, children, isLit, areaId, id => byId.value[id]?.level);
+const markedAttractions = computed(() => records.value.flatMap(([, { p, c, d, attractions }]) =>
+  (attractions || []).filter(({ id, source }) => !source && (id.startsWith('amap:') || id.startsWith('poi:')))
+    .map(attraction => ({ ...attraction, areas: [p, c, d] }))));
+const markedAttractionIds = computed(() => new Set(markedAttractions.value.map(place => place.id)));
+const { detail, labels, markers } = useMapDetail(
+  map, view, viewport, children, isLit, areaId, id => byId.value[id]?.level, markedAttractions,
+);
 const hint = computed(() => {
   if (!data.value) return '';
   if (map.value && canZoomOut.value) return '拖动地图查看其他区域';
@@ -206,7 +329,12 @@ const target = ref(null);
 const locating = ref(false);
 const fromLocation = ref(false);
 const confirmStatus = ref('');
-const targetRecord = computed(() => target.value && !target.value.remove && saved.value[target.value.id]);
+const targetRecord = computed(() => {
+  if (!target.value || target.value.remove) return undefined;
+  const { id, attraction } = target.value;
+  const record = saved.value[id];
+  return attraction ? record?.attractions?.find(item => item.id === attraction.id) : record;
+});
 let locationRequest = 0;
 
 function placeNames(id) {
@@ -214,13 +342,16 @@ function placeNames(id) {
   return [...new Set([p, c, d || id].filter(Boolean))].map(name);
 }
 
-function openEditor(id) {
+function openEditor(id, searchPlace) {
   if (!canMark(id)) return;
   locationRequest++;
   fromLocation.value = false;
   locating.value = false;
   confirmStatus.value = '';
-  target.value = { id, names: placeNames(id) };
+  const attraction = searchPlace?.attraction && isMapPoint(searchPlace.point)
+    ? { id: searchPlace.key, name: searchPlace.label, point: searchPlace.point }
+    : undefined;
+  target.value = { id, names: placeNames(id), searchPlace, attraction };
   confirmer.value.showModal();
 }
 
@@ -247,6 +378,14 @@ function closeConfirm() {
   locating.value = false;
 }
 
+async function areaAtPoint(point) {
+  const province = match(await shape(root), point, root, byId.value);
+  if (!province) return undefined;
+  const next = match(await shape(province), point, province, byId.value);
+  if (byId.value[next]?.level !== 'city') return next || province;
+  return match(await shape(next), point, next, byId.value) || next;
+}
+
 async function locate({ onEntry = false } = {}) {
   const request = ++locationRequest;
   const current = () => request === locationRequest && (onEntry || confirmer.value?.open);
@@ -261,15 +400,11 @@ async function locate({ onEntry = false } = {}) {
       navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 12000, maximumAge: 60000, enableHighAccuracy: true });
     });
     const point = coordinates(position.coords.longitude, position.coords.latitude);
-    const p = match(await shape(root), point, root, byId.value);
-    if (!p) throw new Error('当前位置不在地图范围内，可以在地图上点击地区来点亮。');
-    const next = match(await shape(p), point, p, byId.value);
-    const c = byId.value[next]?.level === 'city' ? next : undefined;
-    const d = c ? match(await shape(c), point, c, byId.value) : next;
-    const id = d || c || p;
+    const id = await areaAtPoint(point);
+    if (!id) throw new Error('当前位置不在地图范围内，可以在地图上点击地区来点亮。');
     if (!current()) return;
     if (!canMark(id)) throw new Error('当前位置只定位到了省级地区，请在地图上选择城市或区县。');
-    if (onEntry && (lit.value.has(id) || confirmer.value?.open || settings.value?.open || importer.value?.open)) return;
+    if (onEntry && (lit.value.has(id) || searchOpen.value || confirmer.value?.open || settings.value?.open || importer.value?.open)) return;
     target.value = { id, names: placeNames(id) };
     if (onEntry) {
       fromLocation.value = true;
@@ -286,9 +421,10 @@ async function locate({ onEntry = false } = {}) {
   }
 }
 
-async function saveRecords(next, message) {
+async function saveRecords(next, message, showAttraction = false) {
   try {
     await persist(next);
+    if (showAttraction) resetZoom();
     feedback.value = message;
     confirmer.value.close();
   } catch (error) {
@@ -301,7 +437,7 @@ function confirmAction() {
     locate();
     return;
   }
-  const { id, names, remove, count } = target.value;
+  const { id, names, remove, count, attraction } = target.value;
   if (remove) {
     const next = Object.fromEntries(Object.entries(saved.value).filter(entry => !coveredBy(id)(entry)));
     saveRecords(next, '已删除 ' + names.join(' · ') + (count > 1 ? ' 及下级共 ' + count + ' 条足迹。' : ' 的足迹。'));
@@ -309,6 +445,14 @@ function confirmAction() {
   }
   if (!canMark(id)) return;
   const next = { ...saved.value };
+  if (attraction) {
+    const { attractions = [], ...region } = next[id] || { ...regionFor(id), date: localDate(), note: '' };
+    const removing = Boolean(targetRecord.value);
+    const remaining = removing ? attractions.filter(item => item.id !== attraction.id) : [...attractions, attraction];
+    next[id] = { ...region, ...(remaining.length ? { attractions: remaining } : {}) };
+    saveRecords(next, (removing ? '已移除景点标记 ' : '已点亮 ') + attraction.name + '。', !removing);
+    return;
+  }
   if (targetRecord.value) delete next[id];
   else next[id] = { ...regionFor(id), date: localDate(), note: '' };
   saveRecords(next, (targetRecord.value ? '已取消点亮 ' : '已点亮 ') + names.join(' · ') + '。');
@@ -397,8 +541,20 @@ async function importRecords() {
       incoming = parseBackup(contents, regionFor);
     }
     const added = Object.keys(incoming).filter(id => !Object.hasOwn(saved.value, id)).length;
-    await persist({ ...incoming, ...saved.value });
-    feedback.value = '已导入 ' + added + ' 条足迹，跳过 ' + (Object.keys(incoming).length - added) + ' 条已有记录。';
+    const next = { ...incoming, ...saved.value };
+    let addedAttractions = 0;
+    for (const [id, record] of Object.entries(incoming)) {
+      if (!saved.value[id] || !record.attractions?.length) continue;
+      const current = saved.value[id].attractions || [];
+      const ids = new Set(current.map(item => item.id));
+      const additions = record.attractions.filter(item => !ids.has(item.id));
+      if (!additions.length) continue;
+      next[id] = { ...next[id], attractions: [...current, ...additions] };
+      addedAttractions += additions.length;
+    }
+    await persist(next);
+    feedback.value = '已导入 ' + added + ' 条地区足迹'
+      + (addedAttractions ? '，另补充 ' + addedAttractions + ' 个景点标记' : '') + '。';
     importer.value.close();
   } catch (error) {
     if (error instanceof SyntaxError) importStatus.value = '文件不是有效的 JSON。';
@@ -452,6 +608,40 @@ function exportRecords() {
               </button>
             </template>
           </nav>
+          <form v-if="areaId === root" class="place-search" role="search" aria-label="搜索地点"
+            @submit.prevent="selectSearchResult(searchResults[0])"
+            @focusout="closeSearch" @keydown.esc.prevent="dismissSearch">
+            <div class="place-search-field">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" aria-hidden="true">
+                <circle cx="10.5" cy="10.5" r="5.5" />
+                <path d="m15 15 4 4" />
+              </svg>
+              <input ref="searchInput" v-model="searchQuery" type="search" aria-label="搜索地点或地区"
+                placeholder="搜索地点或地区" :disabled="!data" autocomplete="off"
+                @focus="searchOpen = true" @input="searchOpen = true">
+            </div>
+            <div v-if="showSearchResults" class="place-search-results">
+              <ul v-if="searchResults.length" aria-label="地点搜索结果">
+                <li v-for="place in searchResults.slice(0, searchLimit)" :key="place.key">
+                  <button type="button" aria-haspopup="dialog" :disabled="!canSelectPlace(place)"
+                    @mousedown.prevent @click="selectSearchResult(place)">
+                    <span class="place-search-name">
+                      <strong>{{ place.label }}</strong>
+                      <small v-if="place.context">{{ place.context }}</small>
+                    </span>
+                    <small v-if="!canSelectPlace(place)">暂无法点亮</small>
+                    <small v-else-if="place.attraction && markedAttractionIds.has(place.key)" class="place-search-lit">景点已点亮</small>
+                    <small v-else-if="saved[place.id]" class="place-search-lit">地区已点亮</small>
+                  </button>
+                </li>
+              </ul>
+              <p v-if="resolvingPlace || searchStatus || !searchResults.length" role="status">
+                {{ resolvingPlace ? '正在识别所属地区…' : searchStatus || '没有找到匹配的地点' }}
+              </p>
+              <p v-if="searchResults.length > searchLimit">匹配较多，可输入更完整的地点名称</p>
+            </div>
+          </form>
           <div v-if="areaId === root" class="map-bar-actions">
             <button type="button" class="add-footprint" aria-label="点亮当前位置" title="点亮当前位置"
               :disabled="!data" @click="openLocator">
@@ -486,6 +676,7 @@ function exportRecords() {
             </g>
             <text v-for="label in labels" :key="label.adcode" :class="{ 'lit-label': label.highlighted }" :x="label.x" :y="label.y">{{ label.text }}</text>
             <g v-for="marker in markers" :key="marker.id" class="attraction-marker" role="img" :aria-label="marker.name">
+              <title>{{ marker.name }}</title>
               <path class="attraction-pin" :transform="'translate(' + marker.x + ' ' + marker.y + ')'"
                 d="M0 0C-2-3-7-7-7-12a7 7 0 1 1 14 0c0 5-5 9-7 12Z" />
               <circle :cx="marker.x" :cy="marker.y - 12" r="2.5" />
@@ -629,10 +820,6 @@ function exportRecords() {
         </span>
       </button>
     </div>
-    <p v-if="attractionData" class="data-credit">
-      景点数据来自 <a :href="attractionData.source" target="_blank" rel="noopener">Lore Routes</a>
-      · <a :href="attractionData.licenseUrl" target="_blank" rel="noopener">{{ attractionData.license }}</a>
-    </p>
   </dialog>
 
   <dialog ref="confirmer" class="confirm-dialog" aria-labelledby="confirm-title" closedby="any" @close="closeConfirm">
@@ -644,13 +831,20 @@ function exportRecords() {
       </svg>
     </span>
     <h2 id="confirm-title" tabindex="-1" autofocus>
-      {{ locating ? '正在定位…' : !target ? '定位失败' : target.remove ? '删除足迹？' : targetRecord ? '取消点亮？' : fromLocation ? '点亮当前位置？' : '点亮这里？' }}
+      {{ locating ? '正在定位…' : !target ? '定位失败' : target.remove ? '删除足迹？'
+        : target.attraction ? (targetRecord ? '移除景点标记？' : '点亮这个景点？')
+        : targetRecord ? '取消点亮？' : fromLocation ? '点亮当前位置？' : target.searchPlace ? '点亮所属地区？' : '点亮这里？' }}
     </h2>
+    <p v-if="target?.searchPlace">
+      {{ target.searchPlace.label }}{{ target.searchPlace.context ? ' · ' + target.searchPlace.context : '' }}
+    </p>
     <p v-if="target" class="confirm-place">{{ target.names.join(' · ') }}</p>
     <p class="confirm-text" role="status">
       {{ locating ? '正在获取你所在的地区，请稍候'
         : confirmStatus || (target?.remove
           ? (target.count > 1 ? '将删除这里及下级地区共 ' + target.count + ' 条足迹，日期和备注会一并删除' : '这条足迹的日期和备注会一并删除')
+          : target?.attraction
+          ? (targetRecord ? '将从地图上移除此景点的图钉' : '地图将标记这个景点，并点亮所属地区')
           : targetRecord
           ? '取消后，这里的到访日期和备注会一并删除'
 
@@ -660,7 +854,7 @@ function exportRecords() {
       <button type="button" class="ghost-button" @click="confirmer.close()">{{ targetRecord || target?.remove ? '保留' : '取消' }}</button>
       <button v-if="!locating && (target || fromLocation)" type="button" class="submit-button"
         :class="{ danger: targetRecord || target?.remove }" @click="confirmAction">
-        {{ !target ? '重试' : target.remove ? '删除' : targetRecord ? '取消点亮' : '点亮' }}
+        {{ !target ? '重试' : target.remove ? '删除' : targetRecord ? (target.attraction ? '移除标记' : '取消点亮') : '点亮' }}
       </button>
     </div>
   </dialog>
