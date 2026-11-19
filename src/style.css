@@ -124,53 +124,100 @@ button:disabled { cursor: default; opacity: .5; }
   color: var(--accent);
 }
 .map-bar nav button:hover:not(:disabled) { border-color: transparent; background: var(--accent-soft); }
-.place-search { position: relative; flex: 1; min-width: 0; max-width: 340px; }
+.map-bar:has(.place-search) { position: relative; z-index: 3; }
+.place-search { flex: 1; min-width: 0; max-width: 340px; }
 .map-bar:has(.place-search) nav { flex: 0 0 auto; }
 .place-search-field { position: relative; color: var(--muted); }
-.place-search-field svg { position: absolute; top: 8px; left: 9px; width: 16px; height: 16px; pointer-events: none; }
+.place-search-field > svg { position: absolute; top: 8px; left: 10px; width: 16px; height: 16px; pointer-events: none; }
 .place-search input {
   width: 100%;
   height: 32px;
-  padding: 0 8px 0 30px;
+  padding: 0 32px 0 32px;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: var(--control);
   color: var(--text);
   font-size: 16px;
+  transition: border-color .15s, background-color .15s, box-shadow .15s;
 }
+.place-search input:focus { border-color: var(--accent-border); background: var(--surface); outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
+.place-search input::-webkit-search-cancel-button { display: none; -webkit-appearance: none; appearance: none; }
 .place-search input::placeholder { color: var(--muted); font-size: 13px; }
+.place-search-clear {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #e3e8ee;
+  color: var(--muted);
+}
+.place-search-clear:hover:not(:disabled) { border: 0; background: var(--line-strong); color: var(--text); }
+.place-search-clear svg { width: 12px; height: 12px; }
 .place-search-results {
   position: absolute;
   z-index: 2;
-  top: calc(100% + 6px);
-  right: 0;
-  left: 0;
-  max-height: min(270px, 45dvh);
+  top: calc(100% - 4px);
+  right: 10px;
+  left: 10px;
+  max-height: min(320px, 50dvh);
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 4px;
+  padding: 6px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 8px 24px rgba(38, 56, 88, 0.14);
+  box-shadow: 0 14px 32px rgba(38, 56, 88, 0.16);
 }
-.place-search-results ul { margin: 0; padding: 0; list-style: none; }
+.place-search-results ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .place-search-results button {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  gap: 10px;
   width: 100%;
-  padding: 6px 8px;
+  min-height: 52px;
+  padding: 8px 10px;
   border-color: transparent;
+  border-radius: var(--radius-sm);
   font-size: 14px;
   text-align: left;
 }
+.place-search-results button:hover:not(:disabled) { border-color: transparent; background: var(--accent-soft); }
+.place-search-results button:active:not(:disabled) { transform: none; }
+.place-search-results button:disabled { opacity: .55; }
 .place-search-results button:focus-visible { outline-offset: -2px; }
-.place-search-name { display: grid; min-width: 0; overflow-wrap: anywhere; }
-.place-search-name small { color: var(--muted); }
-.place-search-lit { flex: none; color: #187556; }
-.place-search-results p { margin: 6px 8px; font-size: 12px; }
+.place-search-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+.place-search-icon.point { background: #fff1e6; color: #d9792b; }
+.place-search-icon svg { width: 17px; height: 17px; }
+.place-search-name { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.place-search-name :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.place-search-name strong { color: var(--text-strong); font-weight: 650; }
+.place-search-name small { color: var(--muted); font-size: 12px; }
+.place-search-tag {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 18px;
+}
+.place-search-tag.lit { background: #e3f3ec; color: #187556; }
+.place-search-status { margin: 8px 10px; color: var(--muted); font-size: 12px; }
 .map-bar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; margin-left: auto; }
 .add-footprint {
   display: grid;

@@ -620,26 +620,46 @@ function exportRecords() {
               <input ref="searchInput" v-model="searchQuery" type="search" aria-label="搜索地点或地区"
                 placeholder="搜索地点或地区" :disabled="!data" autocomplete="off"
                 @focus="searchOpen = true" @input="searchOpen = true">
+              <button v-if="searchQuery" type="button" class="place-search-clear" aria-label="清除搜索"
+                @mousedown.prevent @click="searchQuery = ''; searchInput.focus()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+                  stroke-linecap="round" aria-hidden="true">
+                  <path d="m8 8 8 8M16 8l-8 8" />
+                </svg>
+              </button>
             </div>
             <div v-if="showSearchResults" class="place-search-results">
               <ul v-if="searchResults.length" aria-label="地点搜索结果">
                 <li v-for="place in searchResults.slice(0, searchLimit)" :key="place.key">
                   <button type="button" aria-haspopup="dialog" :disabled="!canSelectPlace(place)"
                     @mousedown.prevent @click="selectSearchResult(place)">
+                    <span class="place-search-icon" :class="{ point: place.isPoint }" aria-hidden="true">
+                      <svg v-if="place.isPoint" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z" />
+                        <circle cx="12" cy="10" r="2.3" />
+                      </svg>
+                      <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m3.5 6.5 5.5-2.5 6 2.5 5.5-2.5v13.5l-5.5 2.5-6-2.5-5.5 2.5Z" />
+                        <path d="M9 4v13.5M15 6.5V20" />
+                      </svg>
+                    </span>
                     <span class="place-search-name">
                       <strong>{{ place.label }}</strong>
-                      <small v-if="place.context">{{ place.context }}</small>
+                      <small v-if="place.context" :title="place.context">{{ place.context }}</small>
                     </span>
-                    <small v-if="!canSelectPlace(place)">暂无法点亮</small>
-                    <small v-else-if="place.attraction && markedAttractionIds.has(place.key)" class="place-search-lit">景点已点亮</small>
-                    <small v-else-if="saved[place.id]" class="place-search-lit">地区已点亮</small>
+                    <small v-if="!canSelectPlace(place)" class="place-search-tag">暂无法点亮</small>
+                    <small v-else-if="place.attraction && markedAttractionIds.has(place.key)" class="place-search-tag lit">景点已点亮</small>
+                    <small v-else-if="saved[place.id]" class="place-search-tag lit">地区已点亮</small>
                   </button>
                 </li>
               </ul>
-              <p v-if="resolvingPlace || searchStatus || !searchResults.length" role="status">
+              <p v-if="resolvingPlace || searchStatus || !searchResults.length" role="status"
+                class="place-search-status">
                 {{ resolvingPlace ? '正在识别所属地区…' : searchStatus || '没有找到匹配的地点' }}
               </p>
-              <p v-if="searchResults.length > searchLimit">匹配较多，可输入更完整的地点名称</p>
+              <p v-if="searchResults.length > searchLimit" class="place-search-status">匹配较多，可输入更完整的地点名称</p>
             </div>
           </form>
           <div v-if="areaId === root" class="map-bar-actions">
