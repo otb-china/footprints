@@ -157,6 +157,14 @@ function regionFor(id) {
   return { p, c: c || (municipalities.has(p) ? p : undefined), d: area.level === 'district' ? id : undefined };
 }
 
+function saveErrorMessage(error, fallback) {
+  if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+    return '站点存储空间不足，足迹未保存。请先备份已有足迹。';
+  }
+  if (error instanceof FootprintStorageError || error instanceof StorageConflictError) return error.message;
+  return fallback;
+}
+
 async function persist(records) {
   if (!storageReadable) throw new FootprintStorageError('无法读取已有足迹，请刷新后重试。');
   if (saving) throw new FootprintStorageError('正在保存足迹，请稍后重试。');
@@ -180,7 +188,7 @@ async function saveNote(id, value) {
     await persist({ ...saved.value, [id]: { ...record, note: text } });
     feedback.value = '备注已保存。';
   } catch (error) {
-    feedback.value = (error instanceof FootprintStorageError || error instanceof StorageConflictError) ? error.message : '浏览器无法保存备注，请检查存储权限。';
+    feedback.value = saveErrorMessage(error, '浏览器无法保存备注，请检查存储权限。');
   }
 }
 
@@ -284,7 +292,7 @@ async function saveRecords(next, message) {
     feedback.value = message;
     confirmer.value.close();
   } catch (error) {
-    confirmStatus.value = (error instanceof FootprintStorageError || error instanceof StorageConflictError) ? error.message : '浏览器无法保存足迹，请检查存储权限。';
+    confirmStatus.value = saveErrorMessage(error, '浏览器无法保存足迹，请检查存储权限。');
   }
 }
 
@@ -394,7 +402,7 @@ async function importRecords() {
     importer.value.close();
   } catch (error) {
     if (error instanceof SyntaxError) importStatus.value = '文件不是有效的 JSON。';
-    else if (error instanceof DOMException) importStatus.value = '无法读取文件或保存足迹，请检查浏览器权限。';
+    else if (error instanceof DOMException) importStatus.value = saveErrorMessage(error, '无法读取文件或保存足迹，请检查浏览器权限。');
     else importStatus.value = error.message;
   } finally {
     importing.value = false;
