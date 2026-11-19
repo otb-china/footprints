@@ -1,11 +1,12 @@
 <script setup>
 import { computed, onMounted, ref, shallowRef, watch } from 'vue';
+import { readStoredValue, StorageConflictError, storageKeys, writeStoredValues } from "./utils/toolStorage";
 import { coordinates, drawMap, match, readJson, root, shape } from './map.js';
 import { parseBackup, serializeBackup } from './backup.js';
 import { useMapZoom } from './mapZoom.js';
 import { useMapDetail } from './mapDetail.js';
 
-const storageKey = 'footprints-v1';
+const storageKey = storageKeys.records;
 const logoUrl = import.meta.env.BASE_URL + 'footprints-logo.svg';
 const municipalities = new Set([110000, 120000, 310000, 500000]);
 const levels = ['province', 'city', 'district'];
@@ -16,9 +17,15 @@ const map = shallowRef(null);
 const mapMessage = ref('正在加载地图…');
 const saved = shallowRef({});
 const feedback = ref('');
+class FootprintStorageError extends Error {}
+let storageReadable = false;
+let saving = false;
 try {
-  const stored = JSON.parse(localStorage.getItem(storageKey) || '{}');
-  if (stored && typeof stored === 'object' && !Array.isArray(stored)) saved.value = stored;
+  const raw = readStoredValue(storageKey);
+  const stored = raw === null ? {} : JSON.parse(raw);
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) throw new Error('Invalid footprints');
+  saved.value = stored;
+  storageReadable = true;
 } catch {
   feedback.value = '浏览器里的足迹无法读取。';
 }
@@ -150,23 +157,30 @@ function regionFor(id) {
   return { p, c: c || (municipalities.has(p) ? p : undefined), d: area.level === 'district' ? id : undefined };
 }
 
-function persist(records) {
-  localStorage.setItem(storageKey, JSON.stringify(records));
-  saved.value = records;
+async function persist(records) {
+  if (!storageReadable) throw new FootprintStorageError('无法读取已有足迹，请刷新后重试。');
+  if (saving) throw new FootprintStorageError('正在保存足迹，请稍后重试。');
+  saving = true;
+  try {
+    await writeStoredValues({ [storageKey]: JSON.stringify(records) });
+    saved.value = records;
+  } finally {
+    saving = false;
+  }
 }
 
 const areaNote = ref('');
 watch(() => [areaId.value, saved.value[areaId.value]?.note], ([, value]) => { areaNote.value = value || ''; }, { immediate: true });
 
-function saveNote(id, value) {
+async function saveNote(id, value) {
   const record = saved.value[id];
   const text = value.trim();
   if (!record || text === (record.note || '')) return;
   try {
-    persist({ ...saved.value, [id]: { ...record, note: text } });
+    await persist({ ...saved.value, [id]: { ...record, note: text } });
     feedback.value = '备注已保存。';
-  } catch {
-    feedback.value = '浏览器无法保存备注，请检查存储权限。';
+  } catch (error) {
+    feedback.value = (error instanceof FootprintStorageError || error instanceof StorageConflictError) ? error.message : '浏览器无法保存备注，请检查存储权限。';
   }
 }
 
@@ -264,13 +278,13 @@ async function locate({ onEntry = false } = {}) {
   }
 }
 
-function saveRecords(next, message) {
+async function saveRecords(next, message) {
   try {
-    persist(next);
+    await persist(next);
     feedback.value = message;
     confirmer.value.close();
-  } catch {
-    confirmStatus.value = '浏览器无法保存足迹，请检查存储权限。';
+  } catch (error) {
+    confirmStatus.value = (error instanceof FootprintStorageError || error instanceof StorageConflictError) ? error.message : '浏览器无法保存足迹，请检查存储权限。';
   }
 }
 
@@ -375,7 +389,7 @@ async function importRecords() {
       incoming = parseBackup(contents, regionFor);
     }
     const added = Object.keys(incoming).filter(id => !Object.hasOwn(saved.value, id)).length;
-    persist({ ...incoming, ...saved.value });
+    await persist({ ...incoming, ...saved.value });
     feedback.value = '已导入 ' + added + ' 条足迹，跳过 ' + (Object.keys(incoming).length - added) + ' 条已有记录。';
     importer.value.close();
   } catch (error) {
