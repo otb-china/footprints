@@ -5,7 +5,7 @@ import { coordinates, drawMap, isMapPoint, match, readJson, root, shape } from '
 import { parseBackup, serializeBackup } from './backup.js';
 import { useMapZoom } from './mapZoom.js';
 import { useMapDetail } from './mapDetail.js';
-import { amapConfigured, getPlaceDetails, searchPlaces } from './placeSearch.js';
+import { buildPlaceIndex, findPlaces } from './placeSearch.js';
 
 const storageKey = storageKeys.records;
 const logoUrl = import.meta.env.BASE_URL + 'footprints-logo.svg';
@@ -37,77 +37,14 @@ const canMark = id => municipalities.has(id) || ['city', 'district'].includes(by
 const searchQuery = ref('');
 const searchOpen = ref(false);
 const searchInput = ref(null);
-const onlinePlaces = shallowRef([]);
-const searchStatus = ref('');
-const resolvingPlace = ref(false);
-let searchRevision = 0;
+const attractionCatalog = shallowRef(null);
+const attractionLoadError = ref(false);
 const searchLimit = 20;
 const showSearchResults = computed(() => searchOpen.value && Boolean(searchQuery.value.trim()));
-function indexPlace(place, areaCodes) {
-  const parents = areaCodes.map(name).filter(Boolean);
-  const path = [...parents, place.label];
-  const shortPath = path.map(part => part.replace(/(特别行政区|自治区|自治州|地区|省|市|区|县|盟|旗)$/, ''));
-  return { ...place, context: parents.join(' · '), path: path.join(''), shortPath: shortPath.join('') };
-}
-
-const searchIndex = computed(() => Object.values(byId.value).filter(area => canMark(area.adcode)).map(area =>
-  indexPlace({ key: area.adcode, id: area.adcode, label: area.name }, area.acroutes)));
-const searchResults = computed(() => {
-  const query = searchQuery.value.replace(/\s+/g, '');
-  if (!showSearchResults.value) return [];
-  const areas = searchIndex.value.flatMap(place => {
-    if (place.label === query) return [{ ...place, rank: 0 }];
-    if (place.label.startsWith(query)) return [{ ...place, rank: 1 }];
-    if (place.label.includes(query)) return [{ ...place, rank: 2 }];
-    if (place.path.includes(query) || place.shortPath.includes(query)) return [{ ...place, rank: 3 }];
-    return [];
-  }).sort((a, b) => a.rank - b.rank);
-  const seen = new Set(areas.filter(place => place.rank === 0).map(place => place.id + ':' + place.label));
-  const points = onlinePlaces.value.flatMap(tip => {
-    if (typeof tip?.name !== 'string' || !tip.name.trim()) return [];
-    const id = Number(tip.adcode);
-    const district = typeof tip.district === 'string' && tip.district.trim()
-      ? tip.district.trim() : canMark(id) ? placeNames(id).join(' · ') : '';
-    const address = typeof tip.address === 'string' ? tip.address.trim() : '';
-    const context = address.startsWith(district) ? address : [district, address].filter(Boolean).join(' · ');
-    const poiId = typeof tip.id === 'string' && tip.id.trim() ? tip.id : undefined;
-    const key = poiId ? 'amap:' + poiId : 'poi:' + [tip.name, id, context, tip.point].join(':');
-    const areaLabel = id + ':' + tip.name;
-    if (seen.has(key) || seen.has(areaLabel)) return [];
-    seen.add(key);
-    return [{ key, id, poiId, label: tip.name, context, isPoint: true, point: tip.point,
-      attraction: tip.attraction }];
-  });
-  return [...areas.filter(place => place.rank === 0), ...points, ...areas.filter(place => place.rank !== 0)];
-});
-
-watch([searchQuery, showSearchResults], ([value, visible], _, onCleanup) => {
-  searchRevision++;
-  onlinePlaces.value = [];
-  searchStatus.value = '';
-  resolvingPlace.value = false;
-  if (!visible || [...value.trim()].length < 2 || searchIndex.value.some(place => place.label === value.trim())) return;
-  if (!amapConfigured) {
-    searchStatus.value = '高德地点搜索尚未配置，可搜索城市或区县';
-    return;
-  }
-  searchStatus.value = '正在查询地点…';
-  const controller = new AbortController();
-  const timer = setTimeout(async () => {
-    try {
-      const places = await searchPlaces(value.trim(), controller.signal);
-      if (controller.signal.aborted) return;
-      onlinePlaces.value = places;
-      searchStatus.value = '';
-    } catch {
-      if (!controller.signal.aborted) searchStatus.value = '高德地点搜索暂不可用';
-    }
-  }, 700);
-  onCleanup(() => {
-    controller.abort();
-    clearTimeout(timer);
-  });
-});
+const searchIndex = computed(() => buildPlaceIndex(byId.value, attractionCatalog.value, markedAttractions.value, canMark));
+const searchResults = computed(() => showSearchResults.value
+  ? findPlaces(searchIndex.value, searchQuery.value)
+  : []);
 
 function closeSearch(event) {
   if (!event.currentTarget.contains(event.relatedTarget)) searchOpen.value = false;
@@ -118,36 +55,12 @@ function dismissSearch() {
   searchOpen.value = false;
 }
 
-const canSelectPlace = place => canMark(place.id) || Boolean(place.point || place.poiId);
-
-async function selectSearchResult(place) {
-  if (!place || resolvingPlace.value || !canSelectPlace(place)) return;
-  const revision = searchRevision;
-  const stillSelecting = () => revision === searchRevision && showSearchResults.value;
-  let id = place.id;
-  let selected = place;
-  if (place.poiId && (place.attraction === undefined || !place.point || !canMark(id))) {
-    resolvingPlace.value = true;
-    const details = await getPlaceDetails(place.poiId).catch(() => undefined);
-    if (!stillSelecting()) return;
-    if (details) {
-      selected = { ...place, point: details.point || place.point, attraction: details.attraction ?? place.attraction };
-      if (!canMark(id)) id = Number(details.adcode);
-    }
-  }
-  if (!canMark(id) && selected.point) {
-    resolvingPlace.value = true;
-    id = await areaAtPoint(selected.point).catch(() => undefined);
-    if (!stillSelecting()) return;
-  }
-  resolvingPlace.value = false;
-  if (!canMark(id)) {
-    searchStatus.value = '无法识别此地点所属的城市或区县';
-    return;
-  }
+function selectSearchResult(place) {
+  if (!place) return;
   dismissSearch();
   searchQuery.value = '';
-  openEditor(id, selected.isPoint ? selected : undefined);
+  if (canMark(place.id)) openEditor(place.id, place.isPoint ? place : undefined);
+  else openArea(place.id);
 }
 
 const isLocalFootprint = ({ c, d }) => Boolean(c || d);
@@ -214,7 +127,7 @@ const isLit = id => areaId.value === root
   : lit.value.has(id);
 const isVisitedProvince = id => areaId.value === root && !municipalities.has(id) && lit.value.has(id);
 const markedAttractions = computed(() => records.value.flatMap(([, { p, c, d, attractions }]) =>
-  (attractions || []).filter(({ id, source }) => !source && (id.startsWith('amap:') || id.startsWith('poi:')))
+  (attractions || []).filter(({ id, source }) => !source && (id.startsWith('catalog:') || id.startsWith('amap:') || id.startsWith('poi:')))
     .map(attraction => ({ ...attraction, areas: [p, c, d] }))));
 const markedAttractionIds = computed(() => new Set(markedAttractions.value.map(place => place.id)));
 const { detail, labels, markers } = useMapDetail(
@@ -235,6 +148,11 @@ onMounted(async () => {
     return;
   }
   try {
+    void readJson('attractions.json').then(catalog => {
+      attractionCatalog.value = catalog;
+    }).catch(() => {
+      attractionLoadError.value = true;
+    });
     const catalog = await readJson('areas.json');
     byId.value = Object.fromEntries(Object.values(catalog).flatMap(node => node.children || []).map(area => [area.adcode, area]));
     data.value = catalog;
@@ -348,7 +266,7 @@ function openEditor(id, searchPlace) {
   fromLocation.value = false;
   locating.value = false;
   confirmStatus.value = '';
-  const attraction = searchPlace?.attraction && isMapPoint(searchPlace.point)
+  const attraction = searchPlace?.isPoint && isMapPoint(searchPlace.point)
     ? { id: searchPlace.key, name: searchPlace.label, point: searchPlace.point }
     : undefined;
   target.value = { id, names: placeNames(id), searchPlace, attraction };
@@ -631,7 +549,7 @@ function exportRecords() {
             <div v-if="showSearchResults" class="place-search-results">
               <ul v-if="searchResults.length" aria-label="地点搜索结果">
                 <li v-for="place in searchResults.slice(0, searchLimit)" :key="place.key">
-                  <button type="button" aria-haspopup="dialog" :disabled="!canSelectPlace(place)"
+                  <button type="button" :aria-haspopup="canMark(place.id) ? 'dialog' : undefined"
                     @mousedown.prevent @click="selectSearchResult(place)">
                     <span class="place-search-icon" :class="{ point: place.isPoint }" aria-hidden="true">
                       <svg v-if="place.isPoint" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -649,15 +567,14 @@ function exportRecords() {
                       <strong>{{ place.label }}</strong>
                       <small v-if="place.context" :title="place.context">{{ place.context }}</small>
                     </span>
-                    <small v-if="!canSelectPlace(place)" class="place-search-tag">暂无法点亮</small>
-                    <small v-else-if="place.isPoint && markedAttractionIds.has(place.key)" class="place-search-tag lit">景点已点亮</small>
+                    <small v-if="place.isPoint && markedAttractionIds.has(place.key)" class="place-search-tag lit">景点已点亮</small>
                     <small v-else-if="!place.isPoint && saved[place.id]" class="place-search-tag lit">地区已点亮</small>
                   </button>
                 </li>
               </ul>
-              <p v-if="resolvingPlace || searchStatus || !searchResults.length" role="status"
-                class="place-search-status">
-                {{ resolvingPlace ? '正在识别所属地区…' : searchStatus || '没有找到匹配的地点' }}
+              <p v-if="!searchResults.length" role="status" class="place-search-status">
+                {{ attractionLoadError ? '景点数据加载失败，请刷新重试'
+                  : attractionCatalog ? '内置数据里没有找到匹配的地点' : '正在加载景点数据…' }}
               </p>
               <p v-if="searchResults.length > searchLimit" class="place-search-status">匹配较多，可输入更完整的地点名称</p>
             </div>
